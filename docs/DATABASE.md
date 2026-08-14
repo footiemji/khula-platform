@@ -58,6 +58,12 @@ volumes:
 
 Change the `khula`/`khula` username and password before running this anywhere but your own laptop.
 
+## A note on KYC documents specifically
+
+Switching `DATABASE_URL` to Postgres persists **application records** (including KYC metadata — document types, review status, audit log) but **not the encrypted document files themselves**, which stay on local disk under `server/data/uploads/`. On Render, Railway, or any platform without a persistent disk attached, uploaded documents will be lost on redeploy even with Postgres configured — the application record will still show them as "uploaded" but the underlying file will be gone.
+
+For real deployments handling actual KYC documents, either attach a persistent disk to your hosting platform (see `docs/DEPLOY.md`) or move `server/lib/documentStore.js` to object storage (S3, or S3-compatible like Backblaze B2/Cloudflare R2) — that file is the only place document storage logic lives, so it's a contained change. This matters more than it might seem: losing a borrower's uploaded ID document is a worse failure mode than losing an application record, since re-uploading is friction the borrower has to redo.
+
 ## How the Postgres backend actually stores data
 
 Rather than a hand-built schema per collection (applications, conversations, admins), records are stored as JSONB blobs in one generic `store` table:
@@ -75,4 +81,4 @@ CREATE TABLE store (
 
 ## Verified, not assumed
 
-Both backends were tested end-to-end against the same suite: create an application (approved and declined paths), download the generated pre-agreement PDF, sign, cancel within the reconsideration window, admin login/stats/list, and a full WhatsApp conversation. The Postgres backend was tested against a real local Postgres instance, not just reviewed for correctness.
+Both backends were tested end-to-end against the same suite: create an application (approved and declined paths), upload KYC documents (including a magic-byte rejection test with a disguised file), decrypt and view a document as admin with a byte-for-byte diff against the original, verify KYC and unlock signing, download the generated pre-agreement PDF, sign, cancel within the reconsideration window, admin login/stats/list, and a full WhatsApp conversation. The Postgres backend was tested against a real local Postgres instance, not just reviewed for correctness.

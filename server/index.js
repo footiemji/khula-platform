@@ -20,6 +20,19 @@ app.use(express.json({ limit: '1mb' }));
 const applyLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 30, message: { error: 'Too many requests, please try again later.' } });
 app.use('/api/applications', applyLimiter);
 
+// Tighter limit on admin login specifically — this is the endpoint most
+// worth protecting against brute-force password guessing.
+const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { error: 'Too many login attempts. Please try again in 15 minutes.' } });
+app.use('/api/admin/login', loginLimiter);
+
+if (!process.env.KYC_ENCRYPTION_KEY) {
+  console.warn(
+    '\n[warning] KYC_ENCRYPTION_KEY is not set. Document uploads will fail until you set one:\n' +
+    '  node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"\n' +
+    '  then add KYC_ENCRYPTION_KEY=<the output> to your .env\n'
+  );
+}
+
 app.use('/api/applications', applicationsRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/whatsapp', whatsappRouter);

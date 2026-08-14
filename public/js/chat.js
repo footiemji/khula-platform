@@ -29,6 +29,53 @@
     chatBody.scrollTop = chatBody.scrollHeight;
   }
 
+  function addLinkButton(href, label) {
+    const wrap = document.createElement('div');
+    wrap.className = 'bubble system';
+    const a = document.createElement('a');
+    a.href = href;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.textContent = label;
+    a.style.color = 'var(--forest)';
+    a.style.fontWeight = '600';
+    a.style.textDecoration = 'underline';
+    wrap.appendChild(a);
+    chatBody.appendChild(wrap);
+    chatBody.scrollTop = chatBody.scrollHeight;
+  }
+
+  async function checkStatus() {
+    addSystem('Checking your status…');
+    try {
+      const res = await fetch(`/api/applications/${state.reference}`);
+      const app = await res.json();
+      if (!res.ok) { await botSay(`⚠️ ${app.error || 'Could not find that application.'}`); return; }
+
+      if (app.status === 'pending_kyc') {
+        const missing = app.kyc?.missingDocuments || [];
+        if (missing.length > 0) {
+          await botSay(`Still waiting on: ${missing.join(', ').replace(/_/g, ' ')}.`, [{ label: 'Check status', value: 'status' }]);
+        } else {
+          await botSay("All your documents are in and our team is reviewing them — usually within 1 business day. Check back soon!", [{ label: 'Check status', value: 'status' }]);
+        }
+      } else if (app.status === 'awaiting_signature') {
+        state.step = 'awaiting_signature';
+        await botSay("You're cleared! Reply 'sign' whenever you're ready.", [{ label: 'Sign now', value: 'sign' }]);
+      } else if (app.status === 'active') {
+        await botSay("This loan is already signed and active. Nothing more to do here!");
+        state.step = 'done';
+      } else if (app.status === 'declined') {
+        await botSay("This application didn't move forward. If you think that's a mistake, please reach out to Khula directly.");
+        state.step = 'done';
+      } else {
+        await botSay(`Current status: ${app.status.replace(/_/g, ' ')}.`);
+      }
+    } catch {
+      await botSay('⚠️ Could not reach the Khula server.');
+    }
+  }
+
   function addSystem(text) {
     const el = document.createElement('div');
     el.className = 'bubble system';
@@ -192,6 +239,14 @@
         }
         break;
 
+      case 'pending_kyc':
+        if (/^status$/i.test(text)) {
+          await checkStatus();
+        } else {
+          await botSay("Upload your documents using the link above, then reply 'status' to check where things stand.", [{ label: 'Check status', value: 'status' }]);
+        }
+        break;
+
       default:
         await botSay("That's the end of this demo conversation. Refresh to start a new application.");
     }
@@ -214,9 +269,10 @@
       state.reference = data.reference;
       await botSay(data.message);
       if (data.decision === 'approved') {
-        state.step = 'awaiting_signature';
+        state.step = 'pending_kyc';
         addPdfLink(`/api/applications/${data.reference}/pre-agreement.pdf`, 'View pre-agreement statement (PDF)');
-        await botSay("Reply 'sign' whenever you're ready to sign your agreement.", [{ label: 'Sign now', value: 'sign' }]);
+        addLinkButton(`/upload.html?ref=${data.reference}`, '📄 Upload your documents');
+        await botSay("Once you've uploaded your documents, our team reviews them (usually within 1 business day). Come back here and reply 'status' any time to check.", [{ label: 'Check status', value: 'status' }]);
       } else {
         state.step = 'done';
       }

@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Upload your documents — Khula Financial Services</title>
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand"><span class="ring-mark"></span> Khula Financial Services</div>
+  <div class="tagline">Grow · Thrive · Rise</div>
+</div>
+
+<div class="upload-shell">
+  <div id="loadingState" class="upload-card">
+    <p>Loading your application…</p>
+  </div>
+
+  <div id="notFoundState" class="upload-card" style="display:none;">
+    <h2 class="display">We couldn't find that application</h2>
+    <p>Double-check the link from your WhatsApp or chat conversation, or reach out to Khula for help.</p>
+  </div>
+
+  <div id="wrongStatusState" class="upload-card" style="display:none;">
+    <h2 class="display">Nothing to upload right now</h2>
+    <p id="wrongStatusMessage"></p>
+  </div>
+
+  <div id="uploadState" class="upload-card" style="display:none;">
+    <h2 class="display">Upload your documents</h2>
+    <p class="upload-intro">Reference <strong id="refLabel"></strong> · We need 3 documents before we can pay out. Accepted formats: PDF, JPEG, PNG. Max 5MB each.</p>
+
+    <div class="doc-slot" data-type="id_document">
+      <div class="doc-slot-header">
+        <span class="doc-slot-title">1. Copy of your ID</span>
+        <span class="doc-slot-status" data-status></span>
+      </div>
+      <p class="doc-slot-hint">Your green ID book, smart ID card, or passport.</p>
+      <input type="file" accept=".pdf,.jpg,.jpeg,.png" data-input />
+    </div>
+
+    <div class="doc-slot" data-type="proof_of_address">
+      <div class="doc-slot-header">
+        <span class="doc-slot-title">2. Proof of address</span>
+        <span class="doc-slot-status" data-status></span>
+      </div>
+      <p class="doc-slot-hint">A utility bill, bank statement, or lease — dated within the last 3 months.</p>
+      <input type="file" accept=".pdf,.jpg,.jpeg,.png" data-input />
+    </div>
+
+    <div class="doc-slot" data-type="proof_of_income">
+      <div class="doc-slot-header">
+        <span class="doc-slot-title">3. Proof of income</span>
+        <span class="doc-slot-status" data-status></span>
+      </div>
+      <p class="doc-slot-hint">Your latest payslip, or 3 months of bank statements if self-employed.</p>
+      <input type="file" accept=".pdf,.jpg,.jpeg,.png" data-input />
+    </div>
+
+    <button class="btn-primary" id="submitBtn">Upload documents</button>
+    <p class="error-msg" id="uploadError"></p>
+    <p class="upload-note">🔒 Your documents are encrypted before they're stored, and only visible to Khula's verification team.</p>
+  </div>
+
+  <div id="successState" class="upload-card" style="display:none;">
+    <h2 class="display">Thanks — we've got what we need</h2>
+    <p id="successMessage"></p>
+  </div>
+</div>
+
+<script src="js/upload.js"></script>
+</body>
+</html>

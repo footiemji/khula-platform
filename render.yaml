@@ -47,6 +47,8 @@ services:
           property: host
       - key: DATABASE_URL
         sync: false # optional: set to a Postgres connection string to persist data (e.g. a Render Postgres instance) — see docs/DATABASE.md. Leave blank to use the JSON file store.
+      - key: KYC_ENCRYPTION_KEY
+        sync: false # required before document uploads work — generate with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
     # Uncomment once you're on a paid plan and ready to persist real data:
     # disk:
     #   name: khula-data

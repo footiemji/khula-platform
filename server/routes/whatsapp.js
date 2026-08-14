@@ -193,7 +193,7 @@ async function finalizeApplication(session) {
     reference,
     createdAt: new Date().toISOString(),
     channel: 'whatsapp',
-    status: outcome.decision === 'approved' ? 'awaiting_signature' : outcome.decision,
+    status: outcome.decision === 'approved' ? 'pending_kyc' : outcome.decision,
     decision: outcome.decision,
     fullName: d.fullName,
     idNumber: d.idNumber,
@@ -208,13 +208,24 @@ async function finalizeApplication(session) {
     popiaConsentAt: new Date().toISOString(),
     affordability,
     risk,
+    kyc: {
+      status: outcome.decision === 'approved' ? 'awaiting_documents' : 'not_applicable',
+      identityVerified: false,
+      addressVerified: false,
+      employmentVerified: false,
+      documents: [],
+      reviewedBy: null,
+      reviewedAt: null,
+      auditLog: [],
+    },
     signature: null,
+    reconsiderationDeadline: null,
     adminNotes: [],
   });
 
   if (outcome.decision === 'approved') {
     const base = process.env.PUBLIC_APP_URL || 'https://your-domain.example';
-    return `You're pre-approved, ${d.fullName.split(' ')[0]}! 🎉\nR${d.requestedAmount} over ${d.termMonths} months, est. R${affordability.proposedInstalment}/month.\nReference: ${reference}\n\nRead your pre-agreement statement: ${base}/api/applications/${reference}/pre-agreement.pdf\nThen visit ${base}/sign/${reference} to review and sign.`;
+    return `You're pre-approved, ${d.fullName.split(' ')[0]}! 🎉\nR${d.requestedAmount} over ${d.termMonths} months, est. R${affordability.proposedInstalment}/month.\nReference: ${reference}\n\nBefore we can pay out we need 3 documents: ID copy, proof of address, proof of income. Upload them here: ${base}/upload.html?ref=${reference}\n\nOur team reviews within 1 business day — message us here anytime to check your status.`;
   }
   if (outcome.decision === 'manual_review') {
     return `Thanks ${d.fullName.split(' ')[0]}. Reference ${reference} needs a quick human review — we'll message you here within 1 business day.`;

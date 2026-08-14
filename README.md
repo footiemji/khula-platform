@@ -48,7 +48,7 @@ Your data persists in a named Docker volume (`khula-data`) across restarts.
 | One-command deploy (Docker) | ✅ `docker compose up --build` |
 | Swappable Postgres backend | ✅ Set `DATABASE_URL` in `.env` to switch from the zero-setup JSON file store to Postgres — same interface, tested against both. See `docs/DATABASE.md` |
 | Data storage | ✅ File-based JSON store for the MVP — swap for Postgres/DynamoDB in one file (`server/lib/db.js`) when you scale |
-| KYC / identity verification (Smile ID) | 🔲 Stubbed — basic ID-number format check only. Wire in Smile ID before real disbursement. |
+| KYC / identity verification | ✅ Working document upload (ID, proof of address, proof of income), encrypted at rest, gated behind mandatory human admin review before signing unlocks. Not biometric/automated — see `docs/COMPLIANCE.md` for exactly what this does and doesn't cover, and §4 below for adding Smile ID on top. |
 | Debit order collection (Netcash DebiCheck) | 🔲 Not yet built — see §4 |
 | Accounting sync (Xero) | 🔲 Not yet built — see §4 |
 
@@ -87,8 +87,8 @@ See `docs/ARCHITECTURE.md` for more detail and a suggested production topology.
 3. Generate a permanent access token and set `WHATSAPP_ACCESS_TOKEN` and `WHATSAPP_PHONE_NUMBER_ID`.
 4. That's it — `server/routes/whatsapp.js` already calls the Graph API `/messages` endpoint once those two variables are set; until then it logs outbound messages to the console so you can test the conversation flow locally.
 
-### Smile ID (KYC / identity verification)
-Add a call in `server/routes/applications.js` right after the ID-number format check — Smile ID's ID-verification API takes the ID number + a selfie/document photo and returns a match confidence. Block disbursement (not just application creation) on a passing KYC result.
+### Smile ID (automated KYC, on top of the existing human review)
+The MVP already gates signing behind document upload + mandatory human review (see `docs/COMPLIANCE.md`). To add automated biometric/document-authenticity checks on top: call Smile ID's verification API when documents are uploaded in `server/routes/applications.js` (`POST /:reference/documents`), store the match confidence on `application.kyc`, and surface it in the admin review panel (`public/js/admin.js`) so your reviewer sees both the automated score and the documents themselves — keep the human gate rather than replacing it, at least until you've validated Smile ID's accuracy for your applicant base.
 
 ### SigniFlow (legally binding e-signature)
 Replace the `POST /api/applications/:reference/sign` handler's typed-name capture with a SigniFlow envelope: generate the loan agreement PDF from the application data, send it to SigniFlow for signature, and use their webhook to flip the application to `active` once countersigned.

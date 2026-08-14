@@ -34,6 +34,17 @@
 
 One decision engine, two front doors (WhatsApp and web) — this matters for an acquirer or a future engineering hire: there's a single source of truth for "is this loan affordable and how risky is it", not two parallel implementations that can drift.
 
+## The lending lifecycle, end to end
+
+```
+apply → [affordability + risk engine] → approved → pending_kyc
+  → borrower uploads ID / proof of address / proof of income (encrypted at rest)
+  → admin reviews documents + confirms 3 checks → awaiting_signature
+  → sign → active → (reconsideration window) → repayment (not yet built)
+```
+
+The KYC step is a deliberate human gate, not an automated pass/fail — see `docs/COMPLIANCE.md` for exactly what it does and doesn't verify, and why. Every document view and every verify/reject decision is timestamped against the reviewing admin (`application.kyc.auditLog`), which matters both operationally and for any future audit or diligence process.
+
 ## Suggested production topology
 
 - **Compute:** containerize `server/` (a `Dockerfile` is trivial to add — it's a single Express process) and deploy to Render, Railway, Fly.io, or AWS ECS/Fargate.
