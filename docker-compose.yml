@@ -1,0 +1,16 @@
+services:
+  khula:
+    build: .
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    volumes:
+      # Persist the JSON data store outside the container. Replace with a
+      # real database service (e.g. postgres) before production — see
+      # docs/ARCHITECTURE.md.
+      - khula-data:/app/server/data
+    restart: unless-stopped
+
+volumes:
+  khula-data:

@@ -1,0 +1,54 @@
+# Render "Blueprint" — lets you deploy this whole app with one click via
+# https://render.com/deploy (point it at your GitHub repo containing this file)
+# or by connecting the repo manually and choosing "Apply from render.yaml".
+#
+# Free tier notes (verified August 2026):
+# - plan: free gives you $0/month, 512MB RAM, 0.1 CPU, and a public HTTPS URL.
+# - Free web services spin down after 15 min of inactivity (~1 min cold start
+#   on the next request) and do NOT support a persistent disk — application
+#   data resets on every restart/redeploy. Fine for tonight's demo; upgrade
+#   `plan` to `starter` ($7/mo) and uncomment the `disk` block below once
+#   you're ready to keep real applications.
+
+services:
+  - type: web
+    name: khula-financial-services
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_EMAIL
+        value: admin@khulafinancial.co.za
+      - key: ADMIN_PASSWORD_HASH
+        sync: false # set this manually in the Render dashboard after running `npm run seed:admin`
+      - key: WHATSAPP_VERIFY_TOKEN
+        value: khula-verify-token
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: MAX_LOAN_AMOUNT
+        value: 15000
+      - key: MIN_LOAN_AMOUNT
+        value: 500
+      - key: MAX_INSTALMENT_TO_INCOME_RATIO
+        value: 0.25
+      - key: RECONSIDERATION_DAYS
+        value: 5
+      - key: PUBLIC_APP_URL
+        fromService:
+          type: web
+          name: khula-financial-services
+          property: host
+      - key: DATABASE_URL
+        sync: false # optional: set to a Postgres connection string to persist data (e.g. a Render Postgres instance) — see docs/DATABASE.md. Leave blank to use the JSON file store.
+    # Uncomment once you're on a paid plan and ready to persist real data:
+    # disk:
+    #   name: khula-data
+    #   mountPath: /app/server/data
+    #   sizeGB: 1

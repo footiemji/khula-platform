@@ -1,0 +1,27 @@
+{
+  "name": "khula-financial-services",
+  "version": "0.1.0",
+  "description": "Khula Financial Services - WhatsApp-forward micro-loan lending platform. Grow. Thrive. Rise.",
+  "main": "server/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "seed:admin": "node server/lib/seedAdmin.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "helmet": "^7.1.0",
+    "express-rate-limit": "^7.3.1",
+    "jsonwebtoken": "^9.0.2",
+    "bcryptjs": "^2.4.3",
+    "uuid": "^9.0.1",
+    "pdfkit": "^0.15.0",
+    "pg": "^8.13.0"
+  }
+}

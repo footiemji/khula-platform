@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Khula Admin — Loan Console</title>
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand"><span class="ring-mark"></span> Khula Admin Console</div>
+  <div class="tagline" id="adminEmailLabel"></div>
+</div>
+
+<div id="loginView" class="admin-login">
+  <h2>Log in</h2>
+  <div class="field"><label>Email</label><input id="loginEmail" type="email" placeholder="admin@khulafinancial.co.za" /></div>
+  <div class="field"><label>Password</label><input id="loginPassword" type="password" placeholder="••••••••" /></div>
+  <button class="btn-primary" id="loginBtn">Log in</button>
+  <div class="error-msg" id="loginError"></div>
+  <p style="font-size:12px;color:var(--ink-soft);margin-top:16px;">No account yet? Run <code>npm run seed:admin -- "yourpassword"</code> and set the printed hash in <code>.env</code>.</p>
+</div>
+
+<div id="dashboardView" class="admin-shell" style="display:none;">
+  <div class="stat-cards" id="statCards"></div>
+
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+    <h2 class="display" style="margin:0;">Applications</h2>
+    <select id="statusFilter">
+      <option value="">All statuses</option>
+      <option value="approved">Approved</option>
+      <option value="manual_review">Manual review</option>
+      <option value="declined">Declined</option>
+      <option value="awaiting_signature">Awaiting signature</option>
+      <option value="active">Active</option>
+    </select>
+  </div>
+
+  <table class="app-table">
+    <thead>
+      <tr>
+        <th>Reference</th><th>Applicant</th><th>Channel</th><th>Amount</th><th>Term</th><th>Status</th><th>Risk</th><th>Actions</th>
+      </tr>
+    </thead>
+    <tbody id="appRows"></tbody>
+  </table>
+</div>
+
+<script src="js/admin.js"></script>
+</body>
+</html>
