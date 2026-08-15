@@ -12,6 +12,17 @@ const otpRouter = require('./routes/otp');
 const agentRouter = require('./routes/agent');
 
 const app = express();
+
+// Render (and most PaaS platforms) sit behind a reverse proxy, which sets
+// X-Forwarded-For on every request. Without telling Express to trust that
+// proxy, express-rate-limit can't safely determine each request's real
+// client IP — in the worst case, every request looks like it comes from
+// the same source, meaning one user hitting a rate limit could
+// incorrectly affect everyone else. '1' means "trust exactly one hop" —
+// Render's own proxy — which is correct here and doesn't open this up to
+// IP-spoofing via a client-supplied header, since only Render's proxy is
+// trusted, not arbitrary forwarded values from the internet.
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
 
 app.use(helmet({ contentSecurityPolicy: false })); // CSP disabled for the demo inline styles; tighten for production
