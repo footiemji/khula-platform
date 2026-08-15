@@ -13,27 +13,28 @@
 // South Africa rates specifically, which change periodically.
 
 const { sendWhatsAppMessage } = require('./whatsappSender');
+const { toWhatsAppFormat } = require('./phoneFormat');
 
 function formatDate(iso) {
   return new Date(iso).toLocaleDateString('en-ZA', { day: 'numeric', month: 'long' });
 }
 
 async function sendUpcomingReminder(app, installment) {
-  const phone = app.phoneNumber.replace(/^\+/, '');
+  const phone = toWhatsAppFormat(app.phoneNumber);
   const firstName = app.fullName.split(' ')[0];
   const message = `Hi ${firstName}, this is a reminder that your Khula instalment of R${installment.amount.toFixed(2)} is due on ${formatDate(installment.dueDate)}. Reference ${app.reference}. Make sure there are sufficient funds in your account for the DebiCheck collection. Reply here if you need help.`;
   return sendWhatsAppMessage(phone, message);
 }
 
 async function sendOverdueNotice(app, installment) {
-  const phone = app.phoneNumber.replace(/^\+/, '');
+  const phone = toWhatsAppFormat(app.phoneNumber);
   const firstName = app.fullName.split(' ')[0];
   const message = `Hi ${firstName}, we weren't able to collect your Khula instalment of R${installment.amount.toFixed(2)} due ${formatDate(installment.dueDate)}. Reference ${app.reference}. Please reply here to arrange payment — we'd rather help you catch up than let this become a bigger problem.`;
   return sendWhatsAppMessage(phone, message);
 }
 
 async function sendThankYou(app, installment, remaining) {
-  const phone = app.phoneNumber.replace(/^\+/, '');
+  const phone = toWhatsAppFormat(app.phoneNumber);
   const firstName = app.fullName.split(' ')[0];
   const message = remaining > 0
     ? `Thanks ${firstName}! We've received your payment of R${installment.amount.toFixed(2)}. You have ${remaining} instalment${remaining === 1 ? '' : 's'} left on this loan. Reference ${app.reference}.`

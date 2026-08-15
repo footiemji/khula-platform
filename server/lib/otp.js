@@ -14,14 +14,20 @@ const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const db = require('./db');
 const { sendWhatsAppMessage } = require('./whatsappSender');
+const { toWhatsAppFormat } = require('./phoneFormat');
 
 const OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_VERIFY_ATTEMPTS = 5;
 const MAX_REQUESTS_PER_WINDOW = 3;
 const REQUEST_WINDOW_MS = 15 * 60 * 1000;
 
+// The canonical key used to match a phone number across requests — using
+// the same WhatsApp-ready format here as for the actual send means
+// "0821234567" and "+27 82 123 4567" are correctly recognised as the same
+// number, rather than accidentally creating two separate OTP records for
+// what's really one person.
 function normalizePhone(phone) {
-  return String(phone || '').replace(/[^\d+]/g, '');
+  return toWhatsAppFormat(phone);
 }
 
 function hashCode(code) {
@@ -67,7 +73,7 @@ async function requestOtp(phoneNumber) {
   };
   await db.insert('otp_verifications', record);
 
-  const waMessagingPhone = phone.replace(/^\+/, ''); // WhatsApp Cloud API wants no leading +
+  const waMessagingPhone = phone; // already in WhatsApp-ready format via normalizePhone/toWhatsAppFormat
   const delivered = await sendWhatsAppMessage(waMessagingPhone, `Your Khula Financial Services verification code is ${code}. It expires in 5 minutes. Don't share this code with anyone.`);
 
   if (!delivered) {
