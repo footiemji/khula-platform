@@ -145,12 +145,39 @@
 
       case 'ask_phone':
         state.data.phoneNumber = text;
-        state.step = 'ask_consent';
-        await botSay('Do you consent to Khula processing your personal information under POPIA to assess this application?', [
-          { label: 'Yes, I consent', value: 'yes' },
-          { label: 'No', value: 'no' },
-        ]);
+        state.step = 'requesting_otp';
+        await requestOtp();
         break;
+
+      case 'awaiting_otp': {
+        if (/^resend$/i.test(text)) {
+          state.step = 'requesting_otp';
+          await requestOtp();
+          break;
+        }
+        addSystem('Checking code…');
+        try {
+          const res = await fetch('/api/otp/verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phoneNumber: state.data.phoneNumber, code: text }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            await botSay(`⚠️ ${data.error}`, [{ label: 'Resend code', value: 'resend' }]);
+            return;
+          }
+          state.phoneVerificationToken = data.verificationToken;
+          state.step = 'ask_consent';
+          await botSay("Number verified ✓\n\nDo you consent to Khula processing your personal information under POPIA to assess this application?", [
+            { label: 'Yes, I consent', value: 'yes' },
+            { label: 'No', value: 'no' },
+          ]);
+        } catch {
+          await botSay('⚠️ Could not reach the Khula server.');
+        }
+        break;
+      }
 
       case 'ask_consent':
         if (!/^y(es)?$/i.test(text)) {
@@ -226,10 +253,37 @@
         const term = Number(text.replace(/[^\d.]/g, ''));
         if (!term || term < 1 || term > 36) { await botSay('Please reply with a number of months between 1 and 36.'); return; }
         state.data.termMonths = term;
+        state.step = 'ask_bank_holder';
+        await botSay("Almost done — I need your payout bank details. This account must be in your own name, so we can pay your loan directly to you.\n\nWhat's the account holder's full name?");
+        break;
+      }
+
+      case 'ask_bank_holder':
+        state.data.bankAccountHolder = text;
+        state.step = 'ask_bank_name';
+        await botSay('Which bank?');
+        break;
+
+      case 'ask_bank_name':
+        state.data.bankName = text;
+        state.step = 'ask_account_number';
+        await botSay('Account number?');
+        break;
+
+      case 'ask_account_number': {
+        const acc = text.replace(/\s/g, '');
+        if (!/^\d{6,17}$/.test(acc)) { await botSay("That doesn't look like a valid account number. Please try again."); return; }
+        state.data.accountNumber = acc;
+        state.step = 'ask_branch_code';
+        await botSay('Branch code? (or reply "skip" if you don\'t have it handy)');
+        break;
+      }
+
+      case 'ask_branch_code':
+        state.data.branchCode = /^skip$/i.test(text.trim()) ? null : text.replace(/\s/g, '');
         state.step = 'submitting';
         await submitApplication();
         break;
-      }
 
       case 'awaiting_signature':
         if (/^sign$/i.test(text)) {
@@ -252,13 +306,34 @@
     }
   }
 
+  async function requestOtp() {
+    addSystem('Sending a verification code to your WhatsApp…');
+    try {
+      const res = await fetch('/api/otp/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phoneNumber: state.data.phoneNumber }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        await botSay(`⚠️ ${data.error}`);
+        state.step = 'ask_phone';
+        return;
+      }
+      state.step = 'awaiting_otp';
+      await botSay("We've sent a 6-digit code to your WhatsApp. What is it?", [{ label: 'Resend code', value: 'resend' }]);
+    } catch {
+      await botSay('⚠️ Could not reach the Khula server.');
+    }
+  }
+
   async function submitApplication() {
     addSystem('Checking affordability…');
     try {
       const res = await fetch('/api/applications', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...state.data, channel: 'web' }),
+        body: JSON.stringify({ ...state.data, channel: 'web', phoneVerificationToken: state.phoneVerificationToken }),
       });
       const data = await res.json();
       if (!res.ok) {

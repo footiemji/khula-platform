@@ -278,7 +278,7 @@ footer {
 .app-table th, .app-table td { text-align: left; padding: 12px 14px; font-size: 13px; border-bottom: 1px solid rgba(22,50,26,0.07); }
 .app-table th { background: var(--sage); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.05em; color: var(--ink-soft); }
 .pill { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 600; }
-.pill.approved, .pill.active { background: rgba(44,95,45,0.12); color: var(--forest); }
+.pill.approved, .pill.active, .pill.completed { background: rgba(44,95,45,0.12); color: var(--forest); }
 .pill.manual_review, .pill.awaiting_signature { background: rgba(200,155,42,0.18); color: #8a6a1c; }
 .pill.declined, .pill.cancelled { background: rgba(178,58,46,0.12); color: var(--danger); }
 .pill.pending_kyc { background: rgba(200,155,42,0.18); color: #8a6a1c; }
@@ -310,7 +310,21 @@ footer {
 .row-actions button.review-kyc {
   border: 1px solid var(--gold); color: #8a6a1c; background: var(--white);
   border-radius: 8px; padding: 5px 10px; font-size: 12px; cursor: pointer;
+  margin-right: 4px;
 }
+.kyc-quote-box, .kyc-payout-box, .kyc-bureau-box {
+  background: var(--sage); border-radius: 10px; padding: 12px 14px;
+  font-size: 12.5px; color: var(--ink); margin: 10px 0; line-height: 1.6;
+}
+.kyc-bureau-pending { background: rgba(200,155,42,0.12); }
+
+/* ---------- Admin tabs ---------- */
+.tab-btn {
+  border: 1px solid rgba(22,50,26,0.15); background: var(--white); color: var(--ink-soft);
+  padding: 8px 18px; border-radius: 999px; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.tab-btn.active { background: var(--forest); color: var(--white); border-color: var(--forest); }
+.pill.inactive { background: rgba(22,50,26,0.1); color: var(--ink-soft); }
 .row-actions button {
   border: 1px solid rgba(22,50,26,0.2); background: var(--white); border-radius: 8px;
   padding: 5px 10px; font-size: 12px; cursor: pointer; margin-right: 6px;

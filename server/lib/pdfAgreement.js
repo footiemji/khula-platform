@@ -52,15 +52,58 @@ function streamPreAgreementPDF(res, app, reconsiderationDays = 5) {
   ]);
 
   doc.moveDown(0.6);
-  section(doc, 'Loan terms offered');
+  section(doc, 'Payout details');
   kv(doc, [
-    ['Principal amount', fmtZAR(app.requestedAmount)],
-    ['Term', `${app.termMonths} months`],
-    ['Estimated monthly instalment', fmtZAR(app.affordability?.proposedInstalment)],
-    ['Estimated total repayable', fmtZAR((app.affordability?.proposedInstalment || 0) * app.termMonths)],
+    ['Account holder', app.bankAccountHolder],
+    ['Bank', app.bankName],
+    ['Account number', app.accountNumber ? `****${String(app.accountNumber).slice(-4)}` : '—'],
   ]);
-  doc.fontSize(8).fillColor(INK_SOFT).text(
-    'Figures are estimates based on the information you provided and Khula\'s standard pricing at the time of application. Your final agreement will confirm the exact interest rate, initiation fee, monthly service fee, and total cost of credit as required by the National Credit Act.',
+  doc.fontSize(8).font('Helvetica').fillColor(INK_SOFT).text(
+    'Your loan will be paid into this account. It must be held in your own name — Khula does not pay out to third-party accounts.',
+    { width: 495 }
+  );
+
+  doc.moveDown(0.6);
+  section(doc, 'Cost of credit');
+  const q = app.affordability?.quotation;
+  if (q) {
+    kv(doc, [
+      ['Principal amount', fmtZAR(app.requestedAmount)],
+      ['Term', `${app.termMonths} months`],
+      ['Interest rate', `${(q.monthlyInterestRate * 100).toFixed(1)}% per month${q.isFirstLoan ? ' (first loan rate)' : ' (repeat loan rate)'}`],
+      ['Initiation fee (once-off)', fmtZAR(q.initiationFee)],
+      ['Monthly service fee', fmtZAR(q.monthlyServiceFee)],
+      ['Credit life insurance (first month)', `${fmtZAR(q.schedule[0].insurancePremium)} — reduces as you repay`],
+      ['First month\'s total instalment', fmtZAR(q.firstMonthInstalment)],
+    ]);
+    doc.moveDown(0.3);
+    doc.font('Helvetica-Bold').fontSize(10).fillColor(FOREST).text(`Total interest over the term: ${fmtZAR(q.totalInterest)}`, 50);
+    doc.text(`Total fees over the term: ${fmtZAR(q.initiationFee + q.totalServiceFees)}`, 50);
+    doc.text(`Total insurance over the term: ${fmtZAR(q.totalInsurance)}`, 50);
+    doc.fontSize(11).text(`TOTAL COST OF CREDIT: ${fmtZAR(q.totalCostOfCredit)}`, 50);
+    doc.fontSize(12).text(`TOTAL YOU WILL REPAY: ${fmtZAR(q.totalRepayable)}`, 50);
+    doc.moveDown(0.3);
+    doc.fontSize(8).font('Helvetica').fillColor(INK_SOFT).text(
+      'Interest and fees are charged at or below the maximum rates permitted by the National Credit Act for short-term credit. Credit life insurance is charged on your outstanding balance and reduces each month as you repay, so the total insurance figure above is the sum across the full term, not a flat monthly amount.',
+      { width: 495 }
+    );
+    if (q.aboveShortTermCreditCeiling) {
+      doc.moveDown(0.3);
+      doc.fontSize(8).font('Helvetica-Bold').fillColor('#B23A2E').text(
+        `⚠ This loan amount is above R${q.shortTermCreditCeiling}, which is outside the short-term credit bracket these figures are based on. Confirm the correct interest/fee formula with your compliance officer before relying on this quote.`,
+        { width: 495 }
+      );
+    }
+  } else {
+    kv(doc, [
+      ['Principal amount', fmtZAR(app.requestedAmount)],
+      ['Term', `${app.termMonths} months`],
+      ['Estimated monthly instalment', fmtZAR(app.affordability?.proposedInstalment)],
+    ]);
+  }
+  doc.moveDown(0.3);
+  doc.fontSize(8).font('Helvetica').fillColor(INK_SOFT).text(
+    'Figures are based on the information you provided and Khula\'s pricing at the time of application. Your final signed agreement is the authoritative record of the exact interest rate, fees, and total cost of credit.',
     { width: 495 }
   );
 

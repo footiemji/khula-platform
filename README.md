@@ -21,6 +21,7 @@ npm start
 Then open:
 - **Borrower app:** http://localhost:3000/ — the WhatsApp-style chat widget, fully functional against the real backend
 - **Admin console:** http://localhost:3000/admin.html — log in with `ADMIN_EMAIL` from `.env` and the password you just seeded
+- **Agent console:** http://localhost:3000/agent.html — for shop staff/field agents submitting applications on behalf of a customer. Create an agent first from the admin console's "Agents" tab (or `POST /api/admin/agents`), which generates an agent code and takes a PIN you set — hand those to the agent to log in.
 
 No database server or build step required to try it. To run it in Docker instead:
 
@@ -48,7 +49,13 @@ Your data persists in a named Docker volume (`khula-data`) across restarts.
 | One-command deploy (Docker) | ✅ `docker compose up --build` |
 | Swappable Postgres backend | ✅ Set `DATABASE_URL` in `.env` to switch from the zero-setup JSON file store to Postgres — same interface, tested against both. See `docs/DATABASE.md` |
 | Data storage | ✅ File-based JSON store for the MVP — swap for Postgres/DynamoDB in one file (`server/lib/db.js`) when you scale |
-| KYC / identity verification | ✅ Working document upload (ID, proof of address, proof of income), encrypted at rest, gated behind mandatory human admin review before signing unlocks. Not biometric/automated — see `docs/COMPLIANCE.md` for exactly what this does and doesn't cover, and §4 below for adding Smile ID on top. |
+| KYC / identity verification | ✅ Working document upload (ID, proof of address, proof of income, proof of bank account), encrypted at rest, gated behind mandatory human admin review before signing unlocks. Not biometric/automated — see `docs/COMPLIANCE.md`. |
+| Phone number verification (OTP) | ✅ Working — web applicants must verify a 6-digit code sent via WhatsApp before an application can be created, closing the gap where someone could apply using a phone number they don't control. WhatsApp applicants skip this (the channel itself proves phone control). |
+| Payout account verification | ✅ Working — applicants must provide payout bank details, upload proof of the account, and the admin review explicitly confirms the account is in the applicant's name before signing unlocks. A loose automated name-match hint flags likely mismatches for the reviewer. |
+| Full cost-of-credit quotation | ✅ Working — interest, initiation fee, monthly service fee, and credit life insurance (correctly declining on the outstanding balance) shown as a full month-by-month breakdown, grounded in the actual NCA maximum caps. See `docs/COMPLIANCE.md` for the exact figures and citations. |
+| Manual credit bureau / underwriting check | ✅ Working — admin records employment, credit record, and judgments/defaults findings; KYC verification is blocked until this is recorded. Manual for now — see §4 for wiring in a real bureau API. |
+| DebiCheck mandate initiation | ✅ Stubbed the same way as WhatsApp sending — logs what would be sent until real Netcash/Stitch credentials are configured. See `server/lib/debicheck.js` and §4. |
+| Agent-assisted applications (spaza-shop flow) | ✅ Working — a dedicated form-based console (`public/agent.html`) for shop staff/field agents to submit applications on behalf of a physically-present customer, with its own PIN login, mandatory OTP verification of the *customer's* phone, an explicit customer-present confirmation gate, and full state reset between customers on shared devices. Every application is tagged with which agent/shop facilitated it. See `docs/VISION.md` for the design reasoning. |
 | Debit order collection (Netcash DebiCheck) | 🔲 Not yet built — see §4 |
 | Accounting sync (Xero) | 🔲 Not yet built — see §4 |
 
@@ -93,8 +100,17 @@ The MVP already gates signing behind document upload + mandatory human review (s
 ### SigniFlow (legally binding e-signature)
 Replace the `POST /api/applications/:reference/sign` handler's typed-name capture with a SigniFlow envelope: generate the loan agreement PDF from the application data, send it to SigniFlow for signature, and use their webhook to flip the application to `active` once countersigned.
 
-### Netcash DebiCheck (collections)
-Once a loan is `active`, register a DebiCheck mandate via Netcash using the borrower's bank details, and schedule the recurring debit order for the agreed instalment date. This is a natural next module: `server/routes/collections.js`.
+### DebiCheck collections (Netcash or Stitch)
+The collection layer already exists — `server/lib/debicheck.js` builds the mandate request and logs what it would send; `application.collections` tracks `debicheckStatus`; the admin console has a "Start DebiCheck" button on active loans (`POST /api/admin/applications/:reference/debicheck`). Wiring in a real provider means implementing the `TODO` inside `initiateMandate()` with an actual API call — the function signature and return shape are already what the rest of the app expects, so nothing else needs to change.
+
+Two accredited PASA System Operators worth evaluating:
+- **Netcash** — established, already in Khula's original tech stack. [Docs](https://api.netcash.co.za/inbound-payments/dc/)
+- **Stitch** — newer, API-first, and notably supports card-present mandate signing at a physical point of sale, which is directly relevant if the spaza-shop-assisted application flow (see `docs/VISION.md`) happens. [Docs](https://stitch.money/payment-methods/debicheck)
+
+Neither is wired up by default — `debicheck.js` is intentionally provider-agnostic.
+
+### Credit bureau (XDS, TransUnion, CompuScan, Experian)
+The manual bureau/underwriting check (`POST /api/admin/applications/:reference/underwriting`) is deliberately isolated to one endpoint and one object shape (`application.underwriting`) so swapping the manual entry for a real bureau API call is contained — call the bureau API when KYC review starts, populate the same fields (`employmentConfirmed`, `creditRecordClean`, `judgmentsOrDefaultsFound`) from the response, and set `bureauChecked: true` automatically instead of requiring the admin to tick it. The admin review panel already displays whatever's in this object, so the UI doesn't need to change either.
 
 ### Xero (accounting)
 Sync disbursements and repayments to Xero via their API for clean books from day one — useful both for your own operations and for due diligence if you're raising or being acquired (see `docs/ACQUISITION_READINESS.md`).
@@ -123,6 +139,10 @@ You mentioned wanting Khula to be attractive to larger financial institutions wi
 
 ---
 
-## 8. Deploying tonight
+## 8. Where this goes next
+
+`docs/VISION.md` addresses the harder question directly: how does this stay genuinely responsible lending — proper underwriting, fair collections, fraud prevention — as it gets faster and moves toward an agent-assisted, spaza-shop-speed experience for salary-advance customers, rather than becoming "just technology" the way Wonga.com was. Worth reading before scaling into that higher-vulnerability customer segment.
+
+## 9. Deploying tonight
 
 See `docs/DEPLOY.md` for a verified, cost-checked comparison of Render (free), Railway (~$5/mo), a small VPS (~$4-6/mo, best long-term value), and AWS EC2 — with step-by-step instructions for each and a straight recommendation for getting a live link up in the next 15 minutes. `render.yaml` and `railway.json` are already included so those two platforms deploy with minimal manual configuration.

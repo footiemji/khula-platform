@@ -74,5 +74,16 @@
     "verified": true,
     "verifiedToken": "2d9bae802cc0b08698d1157809de191cd3879a382ac990e1",
     "verifiedAt": "2026-08-15T06:16:06.703Z"
+  },
+  {
+    "id": "b6d77c25-ea4d-4a08-8b28-c2660800d201",
+    "phone": "+27827001234",
+    "codeHash": "1df649e9803092c4c8bb9fed9186c13cd56ea5256885b52203d6fb7720a7b012",
+    "createdAt": "2026-08-15T06:26:36.931Z",
+    "expiresAt": "2026-08-15T06:31:36.931Z",
+    "attempts": 0,
+    "verified": true,
+    "verifiedToken": "06e98378869523b6d7e30d5510390b6f37512058e518438d",
+    "verifiedAt": "2026-08-15T06:26:36.954Z"
   }
 ]

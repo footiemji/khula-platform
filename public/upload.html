@@ -30,7 +30,7 @@
 
   <div id="uploadState" class="upload-card" style="display:none;">
     <h2 class="display">Upload your documents</h2>
-    <p class="upload-intro">Reference <strong id="refLabel"></strong> · We need 3 documents before we can pay out. Accepted formats: PDF, JPEG, PNG. Max 5MB each.</p>
+    <p class="upload-intro">Reference <strong id="refLabel"></strong> · We need 4 documents before we can pay out. Accepted formats: PDF, JPEG, PNG. Max 5MB each.</p>
 
     <div class="doc-slot" data-type="id_document">
       <div class="doc-slot-header">
@@ -55,7 +55,16 @@
         <span class="doc-slot-title">3. Proof of income</span>
         <span class="doc-slot-status" data-status></span>
       </div>
-      <p class="doc-slot-hint">Your latest payslip, or 3 months of bank statements if self-employed.</p>
+      <p class="doc-slot-hint">Your latest 3 months' bank statements — this is what most lenders ask for, since it shows real income patterns, not just a single payslip. A payslip on its own is fine too if that's easier to get.</p>
+      <input type="file" accept=".pdf,.jpg,.jpeg,.png" data-input />
+    </div>
+
+    <div class="doc-slot" data-type="proof_of_bank_account">
+      <div class="doc-slot-header">
+        <span class="doc-slot-title">4. Proof of bank account</span>
+        <span class="doc-slot-status" data-status></span>
+      </div>
+      <p class="doc-slot-hint">A bank-issued confirmation letter, official statement, or cancelled cheque — this must show YOUR name and account number. This is where your loan will be paid.</p>
       <input type="file" accept=".pdf,.jpg,.jpeg,.png" data-input />
     </div>
 

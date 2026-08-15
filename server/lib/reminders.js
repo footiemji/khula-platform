@@ -1,0 +1,44 @@
+// Sends payment reminders and post-payment thank-yous over WhatsApp.
+//
+// Cost note (read this before enabling in production): as of Meta's July
+// 2025 pricing change, a WhatsApp message the business sends FIRST — like
+// a payment reminder — is billed per message under the "Utility" category
+// unless it falls inside an already-open 24-hour window that the customer
+// started (i.e. they messaged Khula recently). There is no monthly free
+// allowance for these anymore. A "payment received, thank you" reply sent
+// in response to a DebiCheck collection is not free-by-default either,
+// since the collection event isn't the customer messaging you — budget for
+// these as a real per-message cost once WHATSAPP_ACCESS_TOKEN is live, and
+// check developers.facebook.com/docs/whatsapp/pricing for current
+// South Africa rates specifically, which change periodically.
+
+const { sendWhatsAppMessage } = require('./whatsappSender');
+
+function formatDate(iso) {
+  return new Date(iso).toLocaleDateString('en-ZA', { day: 'numeric', month: 'long' });
+}
+
+async function sendUpcomingReminder(app, installment) {
+  const phone = app.phoneNumber.replace(/^\+/, '');
+  const firstName = app.fullName.split(' ')[0];
+  const message = `Hi ${firstName}, this is a reminder that your Khula instalment of R${installment.amount.toFixed(2)} is due on ${formatDate(installment.dueDate)}. Reference ${app.reference}. Make sure there are sufficient funds in your account for the DebiCheck collection. Reply here if you need help.`;
+  return sendWhatsAppMessage(phone, message);
+}
+
+async function sendOverdueNotice(app, installment) {
+  const phone = app.phoneNumber.replace(/^\+/, '');
+  const firstName = app.fullName.split(' ')[0];
+  const message = `Hi ${firstName}, we weren't able to collect your Khula instalment of R${installment.amount.toFixed(2)} due ${formatDate(installment.dueDate)}. Reference ${app.reference}. Please reply here to arrange payment — we'd rather help you catch up than let this become a bigger problem.`;
+  return sendWhatsAppMessage(phone, message);
+}
+
+async function sendThankYou(app, installment, remaining) {
+  const phone = app.phoneNumber.replace(/^\+/, '');
+  const firstName = app.fullName.split(' ')[0];
+  const message = remaining > 0
+    ? `Thanks ${firstName}! We've received your payment of R${installment.amount.toFixed(2)}. You have ${remaining} instalment${remaining === 1 ? '' : 's'} left on this loan. Reference ${app.reference}.`
+    : `Thanks ${firstName}! That was your final instalment — this loan is now fully paid off. 🎉 Well done, and thanks for being a Khula customer. Reference ${app.reference}.`;
+  return sendWhatsAppMessage(phone, message);
+}
+
+module.exports = { sendUpcomingReminder, sendOverdueNotice, sendThankYou };

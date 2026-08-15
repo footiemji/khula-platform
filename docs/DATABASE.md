@@ -1,5 +1,7 @@
 # Database: JSON files vs. Postgres
 
+**Short answer if you're wondering whether you need to switch: no, not yet.** The JSON file store works correctly, is already tested against every feature in this app (including the KYC/OTP/quotation flows), and — as long as it's sitting on a persistent disk (see `docs/DEPLOY.md`) — survives restarts and redeploys just fine at MVP scale. Switch to Postgres when you actually hit a reason to: multiple server instances needing to share data, wanting proper indexed queries as application volume grows into the thousands, or wanting point-in-time backups a managed database gives you for free. Until one of those is true, the added moving part isn't buying you anything.
+
 This app ships with two interchangeable storage backends behind the same interface (`server/lib/db.js`). Nothing in `server/routes/` or anywhere else needs to change when you switch — only your `.env`.
 
 ## Which one is active?
@@ -81,4 +83,4 @@ CREATE TABLE store (
 
 ## Verified, not assumed
 
-Both backends were tested end-to-end against the same suite: create an application (approved and declined paths), upload KYC documents (including a magic-byte rejection test with a disguised file), decrypt and view a document as admin with a byte-for-byte diff against the original, verify KYC and unlock signing, download the generated pre-agreement PDF, sign, cancel within the reconsideration window, admin login/stats/list, and a full WhatsApp conversation. The Postgres backend was tested against a real local Postgres instance, not just reviewed for correctness.
+Both backends were tested end-to-end against the same suite: OTP phone verification, application creation with bank account details, upload KYC documents (including a magic-byte rejection test with a disguised file), decrypt and view a document as admin with a byte-for-byte diff against the original, record a manual credit bureau check, verify KYC and unlock signing (including confirming the bureau-check precondition is correctly enforced), download the generated pre-agreement PDF with full cost-of-credit breakdown, sign, initiate a DebiCheck mandate, cancel within the reconsideration window, admin login/stats/list, and a full WhatsApp conversation including the bank-detail collection steps. The Postgres backend was tested against a real local Postgres instance, not just reviewed for correctness.

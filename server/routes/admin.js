@@ -1,7 +1,12 @@
 const express = require('express');
+const bcrypt = require('bcryptjs');
+const { v4: uuidv4 } = require('uuid');
 const db = require('../lib/db');
 const { signToken, requireAdmin, checkPassword } = require('../lib/auth');
 const { readDocument } = require('../lib/documentStore');
+const { initiateMandate } = require('../lib/debicheck');
+const { sendThankYou } = require('../lib/reminders');
+const { runCollectionsSweep } = require('../lib/collectionsSweep');
 const asyncHandler = require('../lib/asyncHandler');
 
 const router = express.Router();
@@ -46,6 +51,32 @@ router.get('/stats', requireAdmin, asyncHandler(async (req, res) => {
     active: apps.filter((a) => a.status === 'active').length,
     totalDisbursed,
   });
+}));
+
+// POST /api/admin/applications/:reference/underwriting
+// Records a manually-performed credit bureau check — employment, credit
+// record, judgments/defaults. Manual for now; this is the natural place to
+// wire in a real bureau API (XDS, TransUnion, CompuScan, Experian) later —
+// swap the manual entry for an API call and keep the same fields on
+// application.underwriting so nothing downstream has to change.
+router.post('/applications/:reference/underwriting', requireAdmin, asyncHandler(async (req, res) => {
+  const { employmentConfirmed, creditRecordClean, judgmentsOrDefaultsFound, notes } = req.body || {};
+  const app = await db.find('applications', (a) => a.reference === req.params.reference);
+  if (!app) return res.status(404).json({ error: 'Application not found.' });
+
+  const updated = await db.update('applications', (a) => a.reference === req.params.reference, (a) => ({
+    ...a,
+    underwriting: {
+      bureauChecked: true,
+      bureauCheckedBy: req.admin.email,
+      bureauCheckedAt: new Date().toISOString(),
+      employmentConfirmed: Boolean(employmentConfirmed),
+      creditRecordClean: Boolean(creditRecordClean),
+      judgmentsOrDefaultsFound: Boolean(judgmentsOrDefaultsFound),
+      notes: notes || null,
+    },
+  }));
+  res.json(updated);
 }));
 
 // POST /api/admin/applications/:reference/decision  { decision: 'approved' | 'declined', note }
@@ -99,8 +130,13 @@ router.get('/applications/:reference/documents/:docId', requireAdmin, asyncHandl
 }));
 
 // POST /api/admin/applications/:reference/kyc-decision
-// Body: { decision: 'verify' | 'reject', checks: { identity, address, employment }, note }
-// This is the human gate: signing only unlocks once all three checks pass.
+// Body: { decision: 'verify' | 'reject', checks: { identity, address, employment, payoutAccount }, note }
+// This is the human gate: signing only unlocks once all four document
+// checks pass AND a bureau/underwriting check has been recorded (see the
+// /underwriting endpoint above) — Khula shouldn't be one automated
+// affordability pass away from disbursing, the way payday-style lenders
+// historically operated. A human confirms both the documents and the
+// credit picture before money can move.
 router.post('/applications/:reference/kyc-decision', requireAdmin, asyncHandler(async (req, res) => {
   const { decision, checks, note } = req.body || {};
   if (!['verify', 'reject'].includes(decision)) {
@@ -117,8 +153,12 @@ router.post('/applications/:reference/kyc-decision', requireAdmin, asyncHandler(
     const identity = Boolean(checks?.identity);
     const address = Boolean(checks?.address);
     const employment = Boolean(checks?.employment);
-    if (!identity || !address || !employment) {
-      return res.status(400).json({ error: 'All three checks (identity, address, employment) must be confirmed to verify KYC.' });
+    const payoutAccount = Boolean(checks?.payoutAccount);
+    if (!identity || !address || !employment || !payoutAccount) {
+      return res.status(400).json({ error: 'All four checks (identity, address, employment, payout account) must be confirmed to verify KYC.' });
+    }
+    if (!app.underwriting?.bureauChecked) {
+      return res.status(400).json({ error: 'Record a credit bureau / underwriting check first (POST .../underwriting) before verifying KYC.' });
     }
     const updated = await db.update('applications', (a) => a.reference === req.params.reference, (a) => ({
       ...a,
@@ -129,6 +169,7 @@ router.post('/applications/:reference/kyc-decision', requireAdmin, asyncHandler(
         identityVerified: true,
         addressVerified: true,
         employmentVerified: true,
+        payoutAccountVerified: true,
         reviewedBy: req.admin.email,
         reviewedAt: new Date().toISOString(),
         auditLog: [...(a.kyc.auditLog || []), { action: 'verified', by: req.admin.email, at: new Date().toISOString(), note: note || null }],
@@ -152,6 +193,152 @@ router.post('/applications/:reference/kyc-decision', requireAdmin, asyncHandler(
     adminNotes: [...(a.adminNotes || []), { note: note || 'KYC documents rejected on review.', at: new Date().toISOString(), by: req.admin.email }],
   }));
   res.json(updated);
+}));
+
+// POST /api/admin/applications/:reference/debicheck — initiates a DebiCheck
+// mandate for a signed, active loan. See server/lib/debicheck.js for what
+// this does with and without real Netcash/Stitch credentials configured.
+router.post('/applications/:reference/debicheck', requireAdmin, asyncHandler(async (req, res) => {
+  const app = await db.find('applications', (a) => a.reference === req.params.reference);
+  if (!app) return res.status(404).json({ error: 'Application not found.' });
+  if (app.status !== 'active') {
+    return res.status(400).json({ error: `DebiCheck mandates can only be initiated for active, signed loans (status: ${app.status}).` });
+  }
+  if (app.collections?.debicheckStatus && app.collections.debicheckStatus !== 'not_started') {
+    return res.status(400).json({ error: `A DebiCheck mandate has already been initiated for this loan (status: ${app.collections.debicheckStatus}). Cancel it with your provider first if you need to resend.` });
+  }
+
+  const result = await initiateMandate({
+    reference: app.reference,
+    accountHolder: app.bankAccountHolder,
+    bankName: app.bankName,
+    accountNumber: app.accountNumber,
+    branchCode: app.branchCode,
+    instalmentAmount: app.affordability?.quotation?.firstMonthInstalment,
+    instalmentDay: new Date(app.signature?.signedAt || Date.now()).getDate(),
+  });
+
+  const updated = await db.update('applications', (a) => a.reference === req.params.reference, (a) => ({
+    ...a,
+    collections: {
+      ...a.collections,
+      debicheckStatus: result.status,
+      mandateReference: result.mandateReference,
+      mandateSentAt: new Date().toISOString(),
+    },
+    adminNotes: [...(a.adminNotes || []), { note: `DebiCheck mandate ${result.mandateReference} initiated.${result.note ? ' ' + result.note : ''}`, at: new Date().toISOString(), by: req.admin.email }],
+  }));
+
+  res.json({ ...updated, debicheckNote: result.note || null });
+}));
+
+// ---------------- Agent management ----------------
+// Agents are shop staff / field reps who submit applications on behalf of
+// a physically-present customer (see server/routes/agent.js and
+// public/agent.html). Managed here since only admins should be able to
+// create or deactivate one.
+
+function generateAgentCode() {
+  return `AG-${Math.floor(1000 + Math.random() * 9000)}`;
+}
+
+// POST /api/admin/agents  { name, shopName, location, pin }
+router.post('/agents', requireAdmin, asyncHandler(async (req, res) => {
+  const { name, shopName, location, pin } = req.body || {};
+  if (!name || !shopName || !pin) {
+    return res.status(400).json({ error: 'Agent name, shop name, and a PIN are required.' });
+  }
+  if (!/^\d{4,8}$/.test(String(pin))) {
+    return res.status(400).json({ error: 'PIN must be 4-8 digits.' });
+  }
+
+  let agentCode;
+  let attempts = 0;
+  do {
+    agentCode = generateAgentCode();
+    attempts += 1;
+  } while (attempts < 10 && (await db.find('agents', (a) => a.agentCode === agentCode)));
+
+  const pinHash = await bcrypt.hash(String(pin), 10);
+  const agent = {
+    id: uuidv4(),
+    agentCode,
+    name,
+    shopName,
+    location: location || null,
+    pinHash,
+    active: true,
+    createdAt: new Date().toISOString(),
+    createdBy: req.admin.email,
+  };
+  await db.insert('agents', agent);
+
+  const { pinHash: _omit, ...safe } = agent;
+  res.status(201).json(safe);
+}));
+
+// GET /api/admin/agents — list agents with a rough activity count
+router.get('/agents', requireAdmin, asyncHandler(async (req, res) => {
+  const agents = await db.readAll('agents');
+  const applications = await db.readAll('applications');
+  const withStats = agents.map(({ pinHash, ...a }) => ({
+    ...a,
+    applicationsSubmitted: applications.filter((app) => app.agent?.agentId === a.id).length,
+    loansActive: applications.filter((app) => app.agent?.agentId === a.id && app.status === 'active').length,
+  }));
+  res.json(withStats.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)));
+}));
+
+// POST /api/admin/agents/:id/deactivate
+router.post('/agents/:id/deactivate', requireAdmin, asyncHandler(async (req, res) => {
+  const updated = await db.update('agents', (a) => a.id === req.params.id, (a) => ({ ...a, active: false }));
+  if (!updated) return res.status(404).json({ error: 'Agent not found.' });
+  const { pinHash, ...safe } = updated;
+  res.json(safe);
+}));
+
+// ---------------- Collections ----------------
+
+// POST /api/admin/applications/:reference/repayments/:installmentNumber/mark-paid
+// No real payment webhook exists yet (see server/lib/debicheck.js) — this is
+// how a payment gets recorded until DebiCheck confirmation is wired in. When
+// it is, call this same logic from the webhook handler instead of requiring
+// a manual click, and keep this endpoint as the manual-override path.
+router.post('/applications/:reference/repayments/:installmentNumber/mark-paid', requireAdmin, asyncHandler(async (req, res) => {
+  const app = await db.find('applications', (a) => a.reference === req.params.reference);
+  if (!app) return res.status(404).json({ error: 'Application not found.' });
+
+  const schedule = app.collections?.repaymentSchedule || [];
+  const installmentNumber = Number(req.params.installmentNumber);
+  const installment = schedule.find((i) => i.installmentNumber === installmentNumber);
+  if (!installment) return res.status(404).json({ error: 'Installment not found.' });
+  if (installment.status === 'paid') return res.status(400).json({ error: 'This installment is already marked paid.' });
+
+  const paidAt = new Date().toISOString();
+  const updatedSchedule = schedule.map((i) =>
+    i.installmentNumber === installmentNumber ? { ...i, status: 'paid', paidAt, markedPaidBy: req.admin.email } : i
+  );
+  const remaining = updatedSchedule.filter((i) => i.status !== 'paid').length;
+  const allPaid = remaining === 0;
+
+  const updated = await db.update('applications', (a) => a.reference === req.params.reference, (a) => ({
+    ...a,
+    status: allPaid ? 'completed' : a.status,
+    collections: { ...a.collections, repaymentSchedule: updatedSchedule },
+    adminNotes: [...(a.adminNotes || []), { note: `Instalment ${installmentNumber} marked paid.${allPaid ? ' Loan fully repaid.' : ''}`, at: paidAt, by: req.admin.email }],
+  }));
+
+  sendThankYou(updated, installment, remaining).catch((e) => console.error('Failed to send thank-you message:', e.message));
+
+  res.json(updated);
+}));
+
+// POST /api/admin/collections/run-sweep — manually trigger the reminder/
+// overdue sweep (the same logic that also runs on a timer — see
+// server/index.js). Useful for testing without waiting for the timer.
+router.post('/collections/run-sweep', requireAdmin, asyncHandler(async (req, res) => {
+  const results = await runCollectionsSweep();
+  res.json(results);
 }));
 
 module.exports = router;

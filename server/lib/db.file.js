@@ -7,11 +7,18 @@ const fs = require('fs');
 const path = require('path');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
-const FILES = {
-  applications: path.join(DATA_DIR, 'applications.json'),
-  admins: path.join(DATA_DIR, 'admins.json'),
-  conversations: path.join(DATA_DIR, 'conversations.json'), // WhatsApp session state
-};
+
+// Derives the file path for a collection name rather than requiring every
+// new collection to be registered in a fixed map — that map went stale
+// once (a new collection was added elsewhere without an entry here, which
+// crashed at runtime), so this is deliberately self-updating. Collection
+// names are restricted to safe characters to prevent path traversal.
+function fileFor(name) {
+  if (!/^[a-z_]+$/.test(name)) {
+    throw new Error(`Invalid collection name: ${name}`);
+  }
+  return path.join(DATA_DIR, `${name}.json`);
+}
 
 function ensureFile(file) {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -19,7 +26,7 @@ function ensureFile(file) {
 }
 
 function readAll(name) {
-  const file = FILES[name];
+  const file = fileFor(name);
   ensureFile(file);
   const raw = fs.readFileSync(file, 'utf8');
   try {
@@ -30,7 +37,7 @@ function readAll(name) {
 }
 
 function writeAll(name, records) {
-  const file = FILES[name];
+  const file = fileFor(name);
   ensureFile(file);
   // Write to temp file then rename — avoids truncated/corrupt writes on crash.
   const tmp = file + '.tmp';

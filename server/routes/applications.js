@@ -1,18 +1,17 @@
 const express = require('express');
 const multer = require('multer');
-const { v4: uuidv4 } = require('uuid');
 const db = require('../lib/db');
-const { assessAffordability } = require('../lib/affordability');
-const { scoreApplication, decide } = require('../lib/riskScore');
 const { streamPreAgreementPDF } = require('../lib/pdfAgreement');
 const { detectType } = require('../lib/fileType');
 const { saveDocument } = require('../lib/documentStore');
+const { createApplication } = require('../lib/applicationEngine');
+const { buildRepaymentSchedule } = require('../lib/repaymentSchedule');
 const asyncHandler = require('../lib/asyncHandler');
 
 const router = express.Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 3 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 4 } });
 
-const REQUIRED_DOCUMENT_TYPES = ['id_document', 'proof_of_address', 'proof_of_income'];
+const REQUIRED_DOCUMENT_TYPES = ['id_document', 'proof_of_address', 'proof_of_income', 'proof_of_bank_account'];
 
 // Default reconsideration window (business days), configurable via .env.
 // This is a policy default, not a confirmed statutory requirement — see
@@ -31,151 +30,31 @@ function addBusinessDays(date, days) {
   return result;
 }
 
-function generateReference() {
-  const stamp = Date.now().toString(36).toUpperCase();
-  return `KHULA-${stamp}`;
-}
-
 // POST /api/applications
-// Creates a new loan application, runs the instant affordability + risk
-// decision, and stores the outcome. Used by both the web chat widget and
-// the WhatsApp conversation engine — one code path, two front doors.
+// Creates a new loan application via the web widget. See
+// server/lib/applicationEngine.js for the shared validation/decision logic
+// used by this, the agent-assisted flow, and (in spirit) WhatsApp.
 router.post('/', asyncHandler(async (req, res) => {
-  const {
-    fullName,
-    idNumber,
-    phoneNumber,
-    employmentType,
-    monthsEmployed,
-    netMonthlyIncome,
-    monthlyExpenses,
-    existingDebtInstalments,
-    requestedAmount,
-    termMonths,
-    popiaConsent,
-    channel = 'web',
-  } = req.body || {};
-
-  if (!popiaConsent) {
-    return res.status(400).json({ error: 'POPIA consent is required before we can process an application.' });
-  }
-  if (!fullName || !idNumber || !phoneNumber) {
-    return res.status(400).json({ error: 'Full name, ID number and phone number are required.' });
-  }
-
-  // Very light ID number sanity check (13 digits, SA format). Real KYC /
-  // identity verification happens via Smile ID before disbursement — see
-  // docs/COMPLIANCE.md.
-  const idClean = String(idNumber).replace(/\s/g, '');
-  if (!/^\d{13}$/.test(idClean)) {
-    return res.status(400).json({ error: 'ID number must be 13 digits.' });
-  }
-
-  const affordability = assessAffordability({
-    netMonthlyIncome: Number(netMonthlyIncome),
-    monthlyExpenses: Number(monthlyExpenses),
-    existingDebtInstalments: Number(existingDebtInstalments || 0),
-    requestedAmount: Number(requestedAmount),
-    termMonths: Number(termMonths),
-  });
-
-  if (affordability.errors && affordability.errors.length) {
-    return res.status(400).json({ error: affordability.errors.join(' ') });
-  }
-
-  const previousLoans = await db.filter('applications', (a) => a.idNumber === idClean && a.decision === 'approved');
-  const missedPayments = previousLoans.filter((a) => a.repaymentStatus === 'missed').length;
-
-  const risk = scoreApplication({
-    employmentType,
-    monthsEmployed: Number(monthsEmployed || 0),
-    netMonthlyIncome: Number(netMonthlyIncome),
-    existingDebtInstalments: Number(existingDebtInstalments || 0),
-    requestedAmount: Number(requestedAmount),
-    previousLoansWithKhula: previousLoans.length,
-    missedPaymentsWithKhula: missedPayments,
-  });
-
-  const outcome = decide({ affordability, risk });
-
-  const record = {
-    id: uuidv4(),
-    reference: generateReference(),
-    createdAt: new Date().toISOString(),
-    channel,
-    status: outcome.decision === 'approved' ? 'pending_kyc' : outcome.decision,
-    decision: outcome.decision,
-    fullName,
-    idNumber: idClean,
-    phoneNumber,
-    employmentType,
-    monthsEmployed: Number(monthsEmployed || 0),
-    netMonthlyIncome: Number(netMonthlyIncome),
-    monthlyExpenses: Number(monthlyExpenses),
-    existingDebtInstalments: Number(existingDebtInstalments || 0),
-    requestedAmount: Number(requestedAmount),
-    termMonths: Number(termMonths),
-    popiaConsent: true,
-    popiaConsentAt: new Date().toISOString(),
-    affordability,
-    risk,
-    kyc: {
-      status: outcome.decision === 'approved' ? 'awaiting_documents' : 'not_applicable',
-      identityVerified: false,
-      addressVerified: false,
-      employmentVerified: false,
-      documents: [],
-      reviewedBy: null,
-      reviewedAt: null,
-      auditLog: [],
-    },
-    signature: null,
-    reconsiderationDeadline: null,
-    adminNotes: [],
-  };
-
-  await db.insert('applications', record);
-
-  res.status(201).json({
-    reference: record.reference,
-    decision: record.decision,
-    status: record.status,
-    proposedInstalment: affordability.proposedInstalment,
-    suggestedAmount: affordability.suggestedAmount,
-    message: messageForDecision(outcome.decision, record),
-  });
+  const result = await createApplication(req.body, { channel: req.body?.channel || 'web', baseUrl: process.env.PUBLIC_APP_URL });
+  if (!result.ok) return res.status(result.status).json({ error: result.error });
+  res.status(201).json(result.response);
 }));
-
-function messageForDecision(decisionType, record) {
-  const base = process.env.PUBLIC_APP_URL || '';
-  switch (decisionType) {
-    case 'approved':
-      return `Good news, ${record.fullName.split(' ')[0]}! You're pre-approved for R${record.requestedAmount} over ${record.termMonths} months (est. R${record.affordability.proposedInstalment}/month). Reference ${record.reference}.\n\nBefore we can pay out, we need 3 documents: a copy of your ID, proof of address, and proof of income (payslip or bank statement). Upload them here: ${base}/upload.html?ref=${record.reference}\n\nOur team reviews documents within 1 business day — you'll be notified here once you're cleared to sign.`;
-    case 'manual_review':
-      return `Thanks ${record.fullName.split(' ')[0]}. Your application (${record.reference}) needs a quick human review — we'll be in touch on WhatsApp within 1 business day.`;
-    case 'declined':
-      return record.affordability.suggestedAmount
-        ? `Based on what you shared, R${record.requestedAmount} isn't affordable right now, but R${record.affordability.suggestedAmount} over the same term looks manageable. Reply to try that amount.`
-        : `Based on what you shared, we can't offer a loan right now. Reference ${record.reference}.`;
-    default:
-      return `Your application (${record.reference}) has been received.`;
-  }
-}
 
 // GET /api/applications/:reference — status check
 router.get('/:reference', asyncHandler(async (req, res) => {
   const app = await db.find('applications', (a) => a.reference === req.params.reference);
   if (!app) return res.status(404).json({ error: 'Application not found.' });
-  const { idNumber, kyc, ...safe } = app; // don't echo full ID number or internal file paths back over the wire
+  const { idNumber, kyc, accountNumber, ...safe } = app; // strip ID number, KYC internals, and full account number
   const safeKyc = kyc && {
     status: kyc.status,
     identityVerified: kyc.identityVerified,
     addressVerified: kyc.addressVerified,
     employmentVerified: kyc.employmentVerified,
+    payoutAccountVerified: kyc.payoutAccountVerified,
     documentsUploaded: (kyc.documents || []).map((d) => d.type),
     missingDocuments: REQUIRED_DOCUMENT_TYPES.filter((t) => !(kyc.documents || []).some((d) => d.type === t)),
   };
-  res.json({ ...safe, kyc: safeKyc });
+  res.json({ ...safe, accountNumberMasked: accountNumber ? `****${accountNumber.slice(-4)}` : null, kyc: safeKyc });
 }));
 
 // POST /api/applications/:reference/sign — simulated e-signature capture.
@@ -196,6 +75,7 @@ router.post('/:reference/sign', asyncHandler(async (req, res) => {
 
   const signedAt = new Date();
   const reconsiderationDeadline = addBusinessDays(signedAt, RECONSIDERATION_DAYS);
+  const repaymentSchedule = buildRepaymentSchedule(signedAt, app.affordability?.quotation?.schedule || []);
 
   const updated = await db.update(
     'applications',
@@ -209,6 +89,10 @@ router.post('/:reference/sign', asyncHandler(async (req, res) => {
         ip: req.ip,
       },
       reconsiderationDeadline: reconsiderationDeadline.toISOString(),
+      collections: {
+        ...a.collections,
+        repaymentSchedule,
+      },
     })
   );
 
@@ -220,8 +104,10 @@ router.post('/:reference/sign', asyncHandler(async (req, res) => {
   });
 }));
 
-// POST /api/applications/:reference/documents — multipart upload of the 3
-// required KYC documents (id_document, proof_of_address, proof_of_income).
+// POST /api/applications/:reference/documents — multipart upload of the 4
+// required KYC documents (id_document, proof_of_address, proof_of_income,
+// proof_of_bank_account — the last one confirms the payout account and
+// must be in the applicant's name; the admin review checks this).
 // Files are validated by actual content (magic bytes), not by trusting the
 // filename or Content-Type header, then encrypted before being written to
 // disk. Nothing is auto-verified here — a human reviews and unlocks signing
@@ -294,7 +180,7 @@ router.post(
       kycStatus: updated.kyc.status,
       message:
         missing.length === 0
-          ? "All 3 documents received — thanks! Our team will review within 1 business day and let you know when you're cleared to sign."
+          ? `All ${REQUIRED_DOCUMENT_TYPES.length} documents received — thanks! Our team will review within 1 business day and let you know when you're cleared to sign.`
           : `Got it. Still needed: ${missing.join(', ')}.`,
     });
   })

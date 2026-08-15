@@ -7,20 +7,13 @@
 // officer / attorney sign off on the exact ratios and statutory expense
 // tables before this touches real money.
 
+const { buildQuotation } = require('./costOfCredit');
+
 const MAX_INSTALMENT_TO_INCOME_RATIO = Number(process.env.MAX_INSTALMENT_TO_INCOME_RATIO || 0.25);
 const MIN_LOAN_AMOUNT = Number(process.env.MIN_LOAN_AMOUNT || 500);
 const MAX_LOAN_AMOUNT = Number(process.env.MAX_LOAN_AMOUNT || 15000);
 
-// Simple flat-rate instalment calc for illustration. Replace with your
-// actual NCA-compliant initiation fee / service fee / interest schedule.
-function estimateInstalment({ principal, termMonths, monthlyRatePct = 3 }) {
-  const r = monthlyRatePct / 100;
-  if (r === 0) return principal / termMonths;
-  const instalment = (principal * r) / (1 - Math.pow(1 + r, -termMonths));
-  return Math.round(instalment * 100) / 100;
-}
-
-function assessAffordability({ netMonthlyIncome, monthlyExpenses, existingDebtInstalments, requestedAmount, termMonths }) {
+function assessAffordability({ netMonthlyIncome, monthlyExpenses, existingDebtInstalments, requestedAmount, termMonths, isFirstLoan = true }) {
   const errors = [];
   if (!netMonthlyIncome || netMonthlyIncome <= 0) errors.push('Net monthly income is required.');
   if (monthlyExpenses == null || monthlyExpenses < 0) errors.push('Monthly expenses are required.');
@@ -31,8 +24,16 @@ function assessAffordability({ netMonthlyIncome, monthlyExpenses, existingDebtIn
 
   if (errors.length) return { eligible: false, errors };
 
+  // The affordability check uses the FULL monthly instalment — capital,
+  // interest, service fee, and insurance together — not just capital and
+  // interest. A loan can look affordable on principal+interest alone and
+  // still leave a borrower unable to cover the real monthly cost once fees
+  // and insurance are added, which is exactly the outcome this check
+  // exists to prevent.
+  const quotation = buildQuotation({ principal: requestedAmount, termMonths, isFirstLoan });
+  const proposedInstalment = quotation.firstMonthInstalment;
+
   const discretionaryIncome = netMonthlyIncome - monthlyExpenses - (existingDebtInstalments || 0);
-  const proposedInstalment = estimateInstalment({ principal: requestedAmount, termMonths });
   const instalmentToIncome = proposedInstalment / netMonthlyIncome;
 
   const passesDiscretionary = discretionaryIncome >= proposedInstalment * 1.1; // 10% buffer
@@ -41,17 +42,23 @@ function assessAffordability({ netMonthlyIncome, monthlyExpenses, existingDebtIn
   const eligible = passesDiscretionary && passesRatio;
 
   // Suggest the largest affordable amount at the same term if declined,
-  // so the flow can offer a counter-offer instead of a flat no.
+  // so the flow can offer a counter-offer instead of a flat no. This
+  // approximates using principal+interest only (fees are near-fixed
+  // regardless of amount, so this stays a reasonable estimate rather than
+  // an exact inverse of the full schedule).
   let suggestedAmount = null;
   if (!eligible) {
     const affordableInstalment = Math.min(
       discretionaryIncome / 1.1,
       netMonthlyIncome * MAX_INSTALMENT_TO_INCOME_RATIO
     );
-    if (affordableInstalment > 0) {
-      // invert the instalment formula for principal
-      const rate = 0.03;
-      const principal = affordableInstalment * (1 - Math.pow(1 + rate, -termMonths)) / rate;
+    const feeAndInsuranceEstimate = quotation.monthlyServiceFee + (quotation.schedule[0]?.insurancePremium || 0);
+    const affordableForCapitalInterest = affordableInstalment - feeAndInsuranceEstimate;
+    if (affordableForCapitalInterest > 0) {
+      const rate = quotation.monthlyInterestRate;
+      const principal = rate === 0
+        ? affordableForCapitalInterest * termMonths
+        : (affordableForCapitalInterest * (1 - Math.pow(1 + rate, -termMonths))) / rate;
       suggestedAmount = Math.max(0, Math.floor(principal / 100) * 100);
     }
   }
@@ -64,7 +71,8 @@ function assessAffordability({ netMonthlyIncome, monthlyExpenses, existingDebtIn
     instalmentToIncomeRatio: Math.round(instalmentToIncome * 1000) / 1000,
     maxAllowedRatio: MAX_INSTALMENT_TO_INCOME_RATIO,
     suggestedAmount: suggestedAmount && suggestedAmount >= MIN_LOAN_AMOUNT ? suggestedAmount : null,
+    quotation,
   };
 }
 
-module.exports = { assessAffordability, estimateInstalment, MIN_LOAN_AMOUNT, MAX_LOAN_AMOUNT };
+module.exports = { assessAffordability, MIN_LOAN_AMOUNT, MAX_LOAN_AMOUNT };
