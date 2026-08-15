@@ -48,7 +48,7 @@ async function requestOtp(phoneNumber) {
 
   const recent = await db.filter(
     'otp_verifications',
-    (o) => o.phone === phone && Date.now() - new Date(o.createdAt).getTime() < REQUEST_WINDOW_MS
+    (o) => o.phone === phone && !o.deliveryFailed && Date.now() - new Date(o.createdAt).getTime() < REQUEST_WINDOW_MS
   );
   if (recent.length >= MAX_REQUESTS_PER_WINDOW) {
     return { ok: false, error: 'Too many codes requested for this number. Please wait 15 minutes and try again.' };
@@ -68,7 +68,18 @@ async function requestOtp(phoneNumber) {
   await db.insert('otp_verifications', record);
 
   const waMessagingPhone = phone.replace(/^\+/, ''); // WhatsApp Cloud API wants no leading +
-  await sendWhatsAppMessage(waMessagingPhone, `Your Khula Financial Services verification code is ${code}. It expires in 5 minutes. Don't share this code with anyone.`);
+  const delivered = await sendWhatsAppMessage(waMessagingPhone, `Your Khula Financial Services verification code is ${code}. It expires in 5 minutes. Don't share this code with anyone.`);
+
+  if (!delivered) {
+    // Don't leave a dead record counting against the rate limit for a code
+    // that never arrived — the person shouldn't burn one of their 3
+    // attempts per 15 minutes on a delivery failure that wasn't their fault.
+    await db.update('otp_verifications', (o) => o.id === record.id, (o) => ({ ...o, deliveryFailed: true }));
+    return {
+      ok: false,
+      error: 'Could not deliver the code to WhatsApp. This usually means the phone number isn\'t on WhatsApp, isn\'t in your approved test-recipient list yet, or your WhatsApp access token has expired — check the server logs for the exact reason.',
+    };
+  }
 
   return { ok: true };
 }
