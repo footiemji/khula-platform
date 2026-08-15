@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Khula Admin — Loan Console</title>
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand"><span class="ring-mark"></span> Khula Admin Console</div>
+  <div class="tagline" id="adminEmailLabel"></div>
+</div>
+
+<div id="loginView" class="admin-login">
+  <h2>Log in</h2>
+  <div class="field"><label>Email</label><input id="loginEmail" type="email" placeholder="admin@khulafinancial.co.za" /></div>
+  <div class="field"><label>Password</label><input id="loginPassword" type="password" placeholder="••••••••" /></div>
+  <button class="btn-primary" id="loginBtn">Log in</button>
+  <div class="error-msg" id="loginError"></div>
+  <p style="font-size:12px;color:var(--ink-soft);margin-top:16px;">No account yet? Run <code>npm run seed:admin -- "yourpassword"</code> and set the printed hash in <code>.env</code>.</p>
+</div>
+
+<div id="dashboardView" class="admin-shell" style="display:none;">
+  <div class="stat-cards" id="statCards"></div>
+
+  <div style="display:flex; gap:10px; margin-bottom:18px;">
+    <button class="tab-btn active" id="tabApplications">Applications</button>
+    <button class="tab-btn" id="tabAgents">Agents</button>
+  </div>
+
+  <div id="applicationsPanel">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+      <h2 class="display" style="margin:0;">Applications</h2>
+      <select id="statusFilter">
+        <option value="">All statuses</option>
+        <option value="approved">Approved</option>
+        <option value="manual_review">Manual review</option>
+        <option value="declined">Declined</option>
+        <option value="awaiting_signature">Awaiting signature</option>
+        <option value="active">Active</option>
+      </select>
+    </div>
+
+    <table class="app-table">
+      <thead>
+        <tr>
+          <th>Reference</th><th>Applicant</th><th>Channel</th><th>Amount</th><th>Term</th><th>Status</th><th>Risk</th><th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="appRows"></tbody>
+    </table>
+  </div>
+
+  <div id="agentsPanel" style="display:none;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+      <h2 class="display" style="margin:0;">Agents</h2>
+      <button class="btn-primary" id="showAddAgentBtn" style="width:auto; padding:9px 18px;">+ Add agent</button>
+    </div>
+
+    <div id="addAgentForm" class="upload-card" style="display:none; margin-bottom:20px;">
+      <div class="field"><label>Agent name</label><input id="newAgentName" type="text" /></div>
+      <div class="field"><label>Shop / location name</label><input id="newAgentShop" type="text" /></div>
+      <div class="field"><label>Address (optional)</label><input id="newAgentLocation" type="text" /></div>
+      <div class="field"><label>PIN (4-8 digits — agent will use this to log in)</label><input id="newAgentPin" type="text" inputmode="numeric" /></div>
+      <button class="btn-primary" id="createAgentBtn" style="background:var(--forest);">Create agent</button>
+      <p class="error-msg" id="agentFormError"></p>
+    </div>
+
+    <table class="app-table">
+      <thead>
+        <tr>
+          <th>Agent code</th><th>Name</th><th>Shop</th><th>Applications</th><th>Active loans</th><th>Status</th><th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="agentRows"></tbody>
+    </table>
+  </div>
+</div>
+
+<div id="kycModal" class="kyc-modal-overlay" style="display:none;">
+  <div class="kyc-modal">
+    <div id="kycModalBody"></div>
+  </div>
+</div>
+
+<script src="js/admin.js"></script>
+</body>
+</html>

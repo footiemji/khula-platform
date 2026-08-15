@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Khula Agent Console</title>
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand"><span class="ring-mark"></span> Khula Agent Console</div>
+  <div class="tagline" id="agentLabel"></div>
+</div>
+
+<div id="loginView" class="admin-login">
+  <h2>Agent login</h2>
+  <div class="field"><label>Agent code</label><input id="agentCode" type="text" placeholder="AG-1234" style="text-transform:uppercase;" /></div>
+  <div class="field"><label>PIN</label><input id="agentPin" type="password" inputmode="numeric" placeholder="••••" /></div>
+  <button class="btn-primary" id="agentLoginBtn">Log in</button>
+  <div class="error-msg" id="agentLoginError"></div>
+</div>
+
+<div id="agentShell" class="admin-shell" style="display:none; max-width: 640px;">
+
+  <div id="idleState" class="upload-card">
+    <h2 class="display" style="margin-top:0;">Ready for the next customer</h2>
+    <p style="color:var(--ink-soft);">Logged in as <strong id="agentNameLabel"></strong> · <span id="shopNameLabel"></span></p>
+    <button class="btn-primary" id="startBtn">Start new application</button>
+  </div>
+
+  <div id="formState" class="upload-card" style="display:none;">
+    <h2 class="display" style="margin-top:0;">New application</h2>
+    <p style="color:var(--ink-soft); font-size:13px;">Fill this in together with the customer. They must confirm the details themselves — this isn't you applying on their behalf.</p>
+
+    <div class="field"><label>Customer full name</label><input id="f_fullName" type="text" /></div>
+    <div class="field"><label>13-digit SA ID number</label><input id="f_idNumber" type="text" maxlength="13" /></div>
+    <div class="field"><label>Customer's own phone number (WhatsApp)</label><input id="f_phoneNumber" type="text" placeholder="+27..." /></div>
+
+    <div class="field" id="otpRequestField">
+      <button class="btn-primary" id="requestOtpBtn" style="background:var(--gold); color:var(--forest-deep);">Send verification code to customer's WhatsApp</button>
+    </div>
+    <div class="field" id="otpVerifyField" style="display:none;">
+      <label>Code the customer received (ask them to read it to you)</label>
+      <input id="f_otpCode" type="text" inputmode="numeric" maxlength="6" />
+      <button class="btn-primary" id="verifyOtpBtn" style="margin-top:8px;">Verify code</button>
+      <span id="otpVerifiedBadge" style="display:none; color:var(--forest); font-weight:600; font-size:13px;">✓ Number verified</span>
+    </div>
+
+    <div class="field">
+      <label><input type="checkbox" id="f_consent" /> Customer consents to Khula processing their personal information under POPIA</label>
+    </div>
+
+    <div class="field">
+      <label>Employment type</label>
+      <select id="f_employmentType">
+        <option value="formal_permanent">Permanent employee</option>
+        <option value="formal_contract">Contract employee</option>
+        <option value="self_employed">Self-employed</option>
+        <option value="informal">Informal / piece work</option>
+      </select>
+    </div>
+    <div class="field"><label>Months in current job/business</label><input id="f_monthsEmployed" type="number" /></div>
+    <div class="field"><label>Net monthly income (R)</label><input id="f_netMonthlyIncome" type="number" /></div>
+    <div class="field"><label>Monthly expenses (R)</label><input id="f_monthlyExpenses" type="number" /></div>
+    <div class="field"><label>Existing debt instalments (R, 0 if none)</label><input id="f_existingDebtInstalments" type="number" value="0" /></div>
+    <div class="field"><label>Loan amount requested (R)</label><input id="f_requestedAmount" type="number" /></div>
+    <div class="field"><label>Term (months)</label><input id="f_termMonths" type="number" value="6" /></div>
+
+    <h3 class="display" style="margin-bottom:8px;">Payout bank account (must be customer's own)</h3>
+    <div class="field"><label>Account holder full name</label><input id="f_bankAccountHolder" type="text" /></div>
+    <div class="field"><label>Bank</label><input id="f_bankName" type="text" /></div>
+    <div class="field"><label>Account number</label><input id="f_accountNumber" type="text" /></div>
+    <div class="field"><label>Branch code (optional)</label><input id="f_branchCode" type="text" /></div>
+
+    <div class="field" style="background: rgba(200,155,42,0.12); padding: 12px; border-radius: 10px;">
+      <label><input type="checkbox" id="f_customerPresent" /> I confirm the customer is physically present with me right now and has personally consented to this application</label>
+    </div>
+
+    <button class="btn-primary" id="submitAppBtn" style="background:var(--forest);">Submit application</button>
+    <button class="btn-primary" id="cancelFormBtn" style="background:transparent;color:var(--ink);border:1px solid rgba(22,50,26,0.2); margin-top:8px;">Cancel</button>
+    <p class="error-msg" id="formError"></p>
+  </div>
+
+  <div id="resultState" class="upload-card" style="display:none;">
+    <h2 class="display" style="margin-top:0;" id="resultTitle"></h2>
+    <p id="resultMessage" style="white-space: pre-wrap; font-size: 13.5px;"></p>
+    <div id="uploadPrompt" style="display:none; margin-top: 14px;">
+      <p style="font-size:13px; color:var(--ink-soft);">You can help the customer photograph their documents right now on this device, or they can do it later from the link below on their own phone.</p>
+      <a id="uploadLink" href="#" target="_blank" class="btn-primary" style="display:inline-block; text-decoration:none; text-align:center;">Upload documents now</a>
+    </div>
+    <button class="btn-primary" id="nextCustomerBtn" style="margin-top:16px;">Done — start next customer</button>
+  </div>
+
+</div>
+
+<script src="js/agent.js"></script>
+</body>
+</html>

@@ -1,0 +1,78 @@
+[
+  {
+    "id": "646e7f46-456c-4903-b06b-1beb5b99da02",
+    "phone": "+27821119999",
+    "codeHash": "1b04926beb65f9a5ee1e51b9f9c8cac2d356c68043578ce9967852d74c82b740",
+    "createdAt": "2026-08-15T05:49:29.165Z",
+    "expiresAt": "2026-08-15T05:54:29.165Z",
+    "attempts": 1,
+    "verified": false,
+    "verifiedToken": null
+  },
+  {
+    "id": "91d0bd1a-389e-4595-ad13-420a12028697",
+    "phone": "+27821119999",
+    "codeHash": "0d72904c687251243bd98fd5900777458c6afdece83fd812cea6627090a501ad",
+    "createdAt": "2026-08-15T05:49:37.158Z",
+    "expiresAt": "2026-08-15T05:54:37.158Z",
+    "attempts": 1,
+    "verified": true,
+    "verifiedToken": "6fdb662ff89c6fc90dea4ab51fc373fa6219f48c8853f9f9",
+    "verifiedAt": "2026-08-15T05:49:37.183Z"
+  },
+  {
+    "id": "8cf915d7-05c1-4999-8d3b-bf6cdf7c9c93",
+    "phone": "+27821119999",
+    "codeHash": "6f6ac34169d4682d7c7354b84d598c45f9860d7f245557d90b1cbb95b1625377",
+    "createdAt": "2026-08-15T05:49:48.821Z",
+    "expiresAt": "2026-08-15T05:54:48.821Z",
+    "attempts": 0,
+    "verified": true,
+    "verifiedToken": "e1315f42e7cc9c657885c50a9277e451591c90c8274baf51",
+    "verifiedAt": "2026-08-15T05:49:48.837Z"
+  },
+  {
+    "id": "6f1414b2-84c9-4adb-ae10-3235dfb9c740",
+    "phone": "+27827778899",
+    "codeHash": "78f4226eb23b7f676fd2d45339fcb697dc46ee3621fe66947dbebf09da03a4eb",
+    "createdAt": "2026-08-15T05:51:16.210Z",
+    "expiresAt": "2026-08-15T05:56:16.210Z",
+    "attempts": 0,
+    "verified": true,
+    "verifiedToken": "1a33cdb2406f901cbf78f81b6c797d52132d5d6c0522be4f",
+    "verifiedAt": "2026-08-15T05:51:16.231Z"
+  },
+  {
+    "id": "77152dcc-509e-42c6-b501-55912f460ee4",
+    "phone": "+27821230000",
+    "codeHash": "44880dba524d41afe8618ae530579a654c055e462e338306c1a243d9e69df488",
+    "createdAt": "2026-08-15T06:12:19.381Z",
+    "expiresAt": "2026-08-15T06:17:19.381Z",
+    "attempts": 0,
+    "verified": true,
+    "verifiedToken": "54a65669f312256efe502e03d1cd4423695bad44693bbf44",
+    "verifiedAt": "2026-08-15T06:12:19.404Z"
+  },
+  {
+    "id": "e792d894-5e07-425f-9c35-55e66960c4b6",
+    "phone": "+27821555222",
+    "codeHash": "8b493f46074a3924140ecbfcdf943878411faeb420c5f75ff6ec749d364651d7",
+    "createdAt": "2026-08-15T06:12:39.843Z",
+    "expiresAt": "2026-08-15T06:17:39.843Z",
+    "attempts": 0,
+    "verified": true,
+    "verifiedToken": "a63d7b0f28e25a53d56dac5bd96fcebeeed19502009fc3fe",
+    "verifiedAt": "2026-08-15T06:12:39.863Z"
+  },
+  {
+    "id": "69b560da-783d-4b37-b5a7-381820baf4ea",
+    "phone": "+27820001111",
+    "codeHash": "33f6df80026ed6ea7b9cdac39ab32f511f9d9b936f66d713b71dd7c4db47cc80",
+    "createdAt": "2026-08-15T06:16:06.681Z",
+    "expiresAt": "2026-08-15T06:21:06.681Z",
+    "attempts": 0,
+    "verified": true,
+    "verifiedToken": "2d9bae802cc0b08698d1157809de191cd3879a382ac990e1",
+    "verifiedAt": "2026-08-15T06:16:06.703Z"
+  }
+]
