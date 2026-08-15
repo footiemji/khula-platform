@@ -45,6 +45,10 @@
       <input id="f_otpCode" type="text" inputmode="numeric" maxlength="6" />
       <button class="btn-primary" id="verifyOtpBtn" style="margin-top:8px;">Verify code</button>
       <span id="otpVerifiedBadge" style="display:none; color:var(--forest); font-weight:600; font-size:13px;">✓ Number verified</span>
+      <div style="margin-top:10px; display:flex; gap:14px;">
+        <button id="resendOtpBtn" type="button" style="background:none; border:none; color:var(--forest); font-size:12.5px; font-weight:600; cursor:pointer; text-decoration:underline; padding:0;">Resend code</button>
+        <button id="wrongNumberBtn" type="button" style="background:none; border:none; color:var(--danger); font-size:12.5px; font-weight:600; cursor:pointer; text-decoration:underline; padding:0;">Wrong number — let me fix it</button>
+      </div>
     </div>
 
     <div class="field">

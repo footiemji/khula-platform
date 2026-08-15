@@ -139,6 +139,18 @@ a { color: inherit; }
 }
 .chat-header .who .name { font-weight: 600; font-size: 15px; }
 .chat-header .who .status { font-size: 11.5px; color: var(--gold-light); }
+.restart-btn {
+  margin-left: auto;
+  background: rgba(255,255,255,0.12);
+  color: var(--gold-light);
+  border: 1px solid rgba(255,255,255,0.25);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.restart-btn:hover { background: rgba(255,255,255,0.2); }
 
 .chat-body {
   flex: 1; overflow-y: auto;

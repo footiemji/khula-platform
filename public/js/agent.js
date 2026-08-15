@@ -7,6 +7,7 @@
 
   let token = sessionStorage.getItem('khula_agent_token') || null;
   let phoneVerificationToken = null;
+  let otpResendCount = 0;
 
   const FORM_FIELDS = [
     'f_fullName', 'f_idNumber', 'f_phoneNumber', 'f_employmentType', 'f_monthsEmployed',
@@ -78,12 +79,15 @@
     document.getElementById('f_consent').checked = false;
     document.getElementById('f_customerPresent').checked = false;
     document.getElementById('f_otpCode').value = '';
+    document.getElementById('f_phoneNumber').disabled = false;
     document.getElementById('otpVerifiedBadge').style.display = 'none';
     document.getElementById('otpRequestField').style.display = 'block';
     document.getElementById('otpVerifyField').style.display = 'none';
     document.getElementById('formError').textContent = '';
+    document.getElementById('formError').style.color = '';
     document.getElementById('submitAppBtn').disabled = false;
     phoneVerificationToken = null;
+    otpResendCount = 0;
   }
 
   function startNewApplication() {
@@ -106,6 +110,12 @@
       if (!res.ok) { errorEl.textContent = data.error; return; }
       document.getElementById('otpRequestField').style.display = 'none';
       document.getElementById('otpVerifyField').style.display = 'block';
+      document.getElementById('f_phoneNumber').disabled = true;
+      otpResendCount += 1;
+      if (otpResendCount >= 3) {
+        errorEl.style.color = 'var(--gold)';
+        errorEl.textContent = `Sent to ${phone} again. Still nothing after a few tries usually means the number's wrong, not a delivery problem — worth double-checking with the customer.`;
+      }
     } catch {
       errorEl.textContent = 'Could not reach the server.';
     }
@@ -204,9 +214,24 @@
     showView(resultState);
   }
 
+  function fixWrongNumber() {
+    document.getElementById('otpVerifyField').style.display = 'none';
+    document.getElementById('otpRequestField').style.display = 'block';
+    document.getElementById('f_phoneNumber').disabled = false;
+    document.getElementById('f_otpCode').value = '';
+    document.getElementById('otpVerifiedBadge').style.display = 'none';
+    document.getElementById('formError').textContent = '';
+    document.getElementById('formError').style.color = '';
+    phoneVerificationToken = null;
+    otpResendCount = 0;
+    document.getElementById('f_phoneNumber').focus();
+  }
+
   document.getElementById('agentLoginBtn').addEventListener('click', login);
   document.getElementById('startBtn').addEventListener('click', startNewApplication);
   document.getElementById('requestOtpBtn').addEventListener('click', requestOtp);
+  document.getElementById('resendOtpBtn').addEventListener('click', requestOtp);
+  document.getElementById('wrongNumberBtn').addEventListener('click', fixWrongNumber);
   document.getElementById('verifyOtpBtn').addEventListener('click', verifyOtp);
   document.getElementById('submitAppBtn').addEventListener('click', submitApplication);
   document.getElementById('cancelFormBtn').addEventListener('click', () => { resetForm(); showView(idleState); });

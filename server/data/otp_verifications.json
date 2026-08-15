@@ -85,5 +85,26 @@
     "verified": true,
     "verifiedToken": "06e98378869523b6d7e30d5510390b6f37512058e518438d",
     "verifiedAt": "2026-08-15T06:26:36.954Z"
+  },
+  {
+    "id": "d618ae21-3ec9-48ff-8a5b-7b23b8137689",
+    "phone": "+27820009999",
+    "codeHash": "98ee86a716f84b1717d5bd380e6752e903291ee55d3e64a13474cab5ab854afa",
+    "createdAt": "2026-08-15T07:28:17.984Z",
+    "expiresAt": "2026-08-15T07:33:17.984Z",
+    "attempts": 0,
+    "verified": false,
+    "verifiedToken": null
+  },
+  {
+    "id": "812b325a-1d5a-4409-9abc-bf76e307e062",
+    "phone": "+27821112222",
+    "codeHash": "a2b63bed5ba022a9e0046fb6ae75a0f8abf7a9027546b86354b04b4cfc89f4a0",
+    "createdAt": "2026-08-15T07:28:17.996Z",
+    "expiresAt": "2026-08-15T07:33:17.996Z",
+    "attempts": 0,
+    "verified": true,
+    "verifiedToken": "446e16adb1307c178a510f49e51c1a4989bd299e78857e3a",
+    "verifiedAt": "2026-08-15T07:28:18.009Z"
   }
 ]

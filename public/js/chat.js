@@ -151,8 +151,15 @@
 
       case 'awaiting_otp': {
         if (/^resend$/i.test(text)) {
+          state.otpResendCount = (state.otpResendCount || 0) + 1;
           state.step = 'requesting_otp';
           await requestOtp();
+          break;
+        }
+        if (/^change ?number$/i.test(text)) {
+          state.step = 'ask_phone';
+          state.otpResendCount = 0;
+          await botSay('No problem — what\'s the correct WhatsApp/cell number?');
           break;
         }
         addSystem('Checking code…');
@@ -164,7 +171,8 @@
           });
           const data = await res.json();
           if (!res.ok) {
-            await botSay(`⚠️ ${data.error}`, [{ label: 'Resend code', value: 'resend' }]);
+            const options = [{ label: 'Resend code', value: 'resend' }, { label: 'Change number', value: 'change number' }];
+            await botSay(`⚠️ ${data.error}`, options);
             return;
           }
           state.phoneVerificationToken = data.verificationToken;
@@ -174,7 +182,7 @@
             { label: 'No', value: 'no' },
           ]);
         } catch {
-          await botSay('⚠️ Could not reach the Khula server.');
+          await botSay('⚠️ Could not reach the Khula server. Check your connection and try again — your progress is still here.', [{ label: 'Resend code', value: 'resend' }, { label: 'Change number', value: 'change number' }]);
         }
         break;
       }
@@ -321,7 +329,11 @@
         return;
       }
       state.step = 'awaiting_otp';
-      await botSay("We've sent a 6-digit code to your WhatsApp. What is it?", [{ label: 'Resend code', value: 'resend' }]);
+      const resendCount = state.otpResendCount || 0;
+      const hint = resendCount >= 2
+        ? `Still not arrived at ${state.data.phoneNumber}? Double-check that's exactly right — a lot of stuck codes come down to one wrong digit.`
+        : `We've sent a 6-digit code to ${state.data.phoneNumber} on WhatsApp. What is it?`;
+      await botSay(hint, [{ label: 'Resend code', value: 'resend' }, { label: 'Change number', value: 'change number' }]);
     } catch {
       await botSay('⚠️ Could not reach the Khula server.');
     }
@@ -376,6 +388,13 @@
 
   sendBtn.addEventListener('click', () => handleInput());
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') handleInput(); });
+
+  document.getElementById('restartBtn').addEventListener('click', () => {
+    if (state.step !== 'welcome' && state.step !== 'ask_name' && !confirm('Start a new application? This clears everything you\'ve entered so far.')) {
+      return;
+    }
+    location.reload();
+  });
 
   start();
 })();
