@@ -38,6 +38,12 @@
     <div class="field"><label>Customer's own phone number (WhatsApp)</label><input id="f_phoneNumber" type="text" placeholder="+27..." /></div>
 
     <div class="field" id="otpRequestField">
+      <div id="waFirstReminder" style="background: rgba(200,155,42,0.12); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; font-size: 12.5px; color: var(--ink);">
+        📱 Before sending the code — ask the customer to message Khula on WhatsApp first (just "Hi" is enough). WhatsApp requires this before we're allowed to send them anything. If they're a first-time applicant, hand them your phone or theirs to tap below and send it now.
+        <div style="margin-top:8px;">
+          <a id="waFirstLink" href="#" target="_blank" rel="noopener" style="display:inline-block; background:var(--forest); color:var(--white); padding:7px 14px; border-radius:999px; font-weight:600; font-size:12px; text-decoration:none;">💬 Open WhatsApp & say Hi</a>
+        </div>
+      </div>
       <button class="btn-primary" id="requestOtpBtn" style="background:var(--gold); color:var(--forest-deep);">Send verification code to customer's WhatsApp</button>
     </div>
     <div class="field" id="otpVerifyField" style="display:none;">

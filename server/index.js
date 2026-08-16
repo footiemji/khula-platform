@@ -74,6 +74,12 @@ setInterval(() => {
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', service: 'khula-financial-services', time: new Date().toISOString() }));
 
+// Non-sensitive config the frontend needs — e.g. the real WhatsApp number
+// for building a wa.me deep link, so it's not hardcoded into static HTML.
+app.get('/api/config', (req, res) => res.json({
+  whatsappBusinessNumber: process.env.WHATSAPP_BUSINESS_NUMBER || null,
+}));
+
 // Serve the borrower chat widget + admin dashboard
 app.use(express.static(path.join(__dirname, '..', 'public')));
 

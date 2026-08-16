@@ -9,6 +9,19 @@
   let phoneVerificationToken = null;
   let otpResendCount = 0;
 
+  // Fetch once on load — used to build the "message us first" WhatsApp link.
+  fetch('/api/config')
+    .then((r) => r.json())
+    .then((config) => {
+      const link = document.getElementById('waFirstLink');
+      if (config.whatsappBusinessNumber && link) {
+        link.href = `https://wa.me/${config.whatsappBusinessNumber}?text=${encodeURIComponent('Hi')}`;
+      } else if (link) {
+        link.closest('#waFirstReminder').style.display = 'none'; // nothing to link to yet — hide rather than show a dead link
+      }
+    })
+    .catch(() => {});
+
   const FORM_FIELDS = [
     'f_fullName', 'f_idNumber', 'f_phoneNumber', 'f_employmentType', 'f_monthsEmployed',
     'f_netMonthlyIncome', 'f_monthlyExpenses', 'f_existingDebtInstalments', 'f_requestedAmount',

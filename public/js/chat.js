@@ -5,6 +5,18 @@
   const quickReplies = document.getElementById('quickReplies');
 
   const state = { step: 'welcome', data: {} };
+  let cachedConfig = null;
+
+  async function getConfig() {
+    if (cachedConfig) return cachedConfig;
+    try {
+      const res = await fetch('/api/config');
+      cachedConfig = await res.json();
+    } catch {
+      cachedConfig = { whatsappBusinessNumber: null };
+    }
+    return cachedConfig;
+  }
 
   function addBubble(text, who = 'bot') {
     const el = document.createElement('div');
@@ -145,6 +157,15 @@
 
       case 'ask_phone':
         state.data.phoneNumber = text;
+        state.step = 'whatsapp_first';
+        await promptWhatsAppFirst();
+        break;
+
+      case 'whatsapp_first':
+        // This is a recommendation, not a hard gate — any reply continues.
+        // Forcing it would block anyone testing, or anyone who already
+        // knows the drill. The buttons exist so most people can just tap
+        // instead of typing anything at all.
         state.step = 'requesting_otp';
         await requestOtp();
         break;
@@ -312,6 +333,50 @@
       default:
         await botSay("That's the end of this demo conversation. Refresh to start a new application.");
     }
+  }
+
+  async function promptWhatsAppFirst() {
+    const config = await getConfig();
+    const number = config.whatsappBusinessNumber;
+
+    if (!number) {
+      // Not configured yet — skip straight through rather than showing a
+      // broken/dead-end step.
+      state.step = 'requesting_otp';
+      await requestOtp();
+      return;
+    }
+
+    const waLink = `https://wa.me/${number}?text=${encodeURIComponent('Hi')}`;
+    await botSay(
+      "One quick thing before your code — WhatsApp needs you to message us first so we're allowed to send anything to your number. Takes 5 seconds:"
+    );
+    addWhatsAppButton(waLink, '💬 Open WhatsApp & say Hi');
+    await botSay("Once you've sent it, tap below.", [
+      { label: "I've sent it — continue", value: 'continue' },
+      { label: 'Skip — I\'ve messaged Khula before', value: 'skip' },
+    ]);
+  }
+
+  function addWhatsAppButton(href, label) {
+    const wrap = document.createElement('div');
+    wrap.className = 'bubble system';
+    const a = document.createElement('a');
+    a.href = href;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.textContent = label;
+    a.style.display = 'inline-block';
+    a.style.background = 'var(--forest)';
+    a.style.color = 'var(--white)';
+    a.style.padding = '9px 16px';
+    a.style.borderRadius = '999px';
+    a.style.fontWeight = '600';
+    a.style.fontSize = '13px';
+    a.style.textDecoration = 'none';
+    wrap.appendChild(a);
+    chatBody.appendChild(wrap);
+    chatBody.scrollTop = chatBody.scrollHeight;
   }
 
   async function requestOtp() {
