@@ -23,10 +23,12 @@
     .catch(() => {});
 
   const FORM_FIELDS = [
-    'f_fullName', 'f_idNumber', 'f_phoneNumber', 'f_employmentType', 'f_monthsEmployed',
-    'f_netMonthlyIncome', 'f_monthlyExpenses', 'f_existingDebtInstalments', 'f_requestedAmount',
-    'f_termMonths', 'f_bankAccountHolder', 'f_bankName', 'f_accountNumber', 'f_branchCode',
+    'f_fullName', 'f_idNumber', 'f_phoneNumber', 'f_employmentType', 'f_employerName', 'f_employerPhone',
+    'f_monthsEmployed', 'f_salaryPaymentDate', 'f_netMonthlyIncome', 'f_averageCommission3mo', 'f_monthlyExpenses',
+    'f_existingDebts', 'f_requestedAmount', 'f_termMonths', 'f_loanPurpose',
+    'f_bankAccountHolder', 'f_bankName', 'f_accountNumber', 'f_branchCode',
   ];
+  const CHECKBOX_FIELDS = ['f_consent', 'f_underDebtReview', 'f_creditBureauConsent', 'f_declarationsAccepted', 'f_customerPresent'];
 
   function showView(view) {
     [idleState, formState, resultState].forEach((el) => (el.style.display = 'none'));
@@ -86,11 +88,12 @@
   // session, even accidentally.
   function resetForm() {
     FORM_FIELDS.forEach((id) => { document.getElementById(id).value = ''; });
+    CHECKBOX_FIELDS.forEach((id) => { document.getElementById(id).checked = false; });
     document.getElementById('f_termMonths').value = '6';
-    document.getElementById('f_existingDebtInstalments').value = '0';
+    document.getElementById('f_averageCommission3mo').value = '0';
     document.getElementById('f_employmentType').value = 'formal_permanent';
-    document.getElementById('f_consent').checked = false;
-    document.getElementById('f_customerPresent').checked = false;
+    document.getElementById('f_maritalStatus').value = 'single';
+    document.getElementById('f_residentialStatus').value = 'renting';
     document.getElementById('f_otpCode').value = '';
     document.getElementById('f_phoneNumber').disabled = false;
     document.getElementById('otpVerifiedBadge').style.display = 'none';
@@ -166,10 +169,26 @@
       errorEl.textContent = 'Customer must consent under POPIA to proceed.';
       return;
     }
+    if (!document.getElementById('f_creditBureauConsent').checked) {
+      errorEl.textContent = 'Customer must consent to a credit bureau check to proceed.';
+      return;
+    }
+    if (!document.getElementById('f_declarationsAccepted').checked) {
+      errorEl.textContent = 'Customer must accept the applicant declarations to proceed.';
+      return;
+    }
     if (!document.getElementById('f_customerPresent').checked) {
       errorEl.textContent = 'Confirm the customer is physically present before submitting.';
       return;
     }
+
+    const debtsText = document.getElementById('f_existingDebts').value.trim();
+    const existingDebts = debtsText
+      ? debtsText.split('\n').map((line) => {
+          const parts = line.split(',').map((p) => p.trim());
+          return { provider: parts[0] || '', type: parts[1] || '', balance: Number(parts[2]) || 0, instalment: Number(parts[3]) || 0 };
+        }).filter((d) => d.provider)
+      : [];
 
     const payload = {
       fullName: document.getElementById('f_fullName').value.trim(),
@@ -177,13 +196,24 @@
       phoneNumber: document.getElementById('f_phoneNumber').value.trim(),
       phoneVerificationToken,
       popiaConsent: true,
+      creditBureauConsent: true,
+      declarationsAccepted: true,
+      maritalStatus: document.getElementById('f_maritalStatus').value,
+      residentialStatus: document.getElementById('f_residentialStatus').value,
+      underDebtReview: document.getElementById('f_underDebtReview').checked,
       employmentType: document.getElementById('f_employmentType').value,
+      employerName: document.getElementById('f_employerName').value.trim() || null,
+      employerPhone: document.getElementById('f_employerPhone').value.trim() || null,
       monthsEmployed: Number(document.getElementById('f_monthsEmployed').value),
+      salaryPaymentDate: document.getElementById('f_salaryPaymentDate').value.trim() || null,
       netMonthlyIncome: Number(document.getElementById('f_netMonthlyIncome').value),
+      averageCommission3mo: Number(document.getElementById('f_averageCommission3mo').value || 0),
+      averageOvertime3mo: 0,
       monthlyExpenses: Number(document.getElementById('f_monthlyExpenses').value),
-      existingDebtInstalments: Number(document.getElementById('f_existingDebtInstalments').value || 0),
+      existingDebts,
       requestedAmount: Number(document.getElementById('f_requestedAmount').value),
       termMonths: Number(document.getElementById('f_termMonths').value),
+      loanPurpose: document.getElementById('f_loanPurpose').value.trim() || null,
       bankAccountHolder: document.getElementById('f_bankAccountHolder').value.trim(),
       bankName: document.getElementById('f_bankName').value.trim(),
       accountNumber: document.getElementById('f_accountNumber').value.trim(),

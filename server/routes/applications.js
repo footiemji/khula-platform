@@ -75,7 +75,7 @@ router.post('/:reference/sign', asyncHandler(async (req, res) => {
 
   const signedAt = new Date();
   const reconsiderationDeadline = addBusinessDays(signedAt, RECONSIDERATION_DAYS);
-  const repaymentSchedule = buildRepaymentSchedule(signedAt, app.affordability?.quotation?.schedule || []);
+  const repaymentSchedule = buildRepaymentSchedule(signedAt, app.affordability?.quotation?.schedule || [], app.salaryPaymentDate);
 
   const updated = await db.update(
     'applications',

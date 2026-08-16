@@ -61,6 +61,30 @@
       <label><input type="checkbox" id="f_consent" /> Customer consents to Khula processing their personal information under POPIA</label>
     </div>
 
+    <div class="field"><label>Marital status</label>
+      <select id="f_maritalStatus">
+        <option value="single">Single</option>
+        <option value="married_in_community">Married in community of property</option>
+        <option value="married_out_of_community">Married out of community of property</option>
+        <option value="divorced_widowed">Divorced / widowed</option>
+      </select>
+    </div>
+    <div class="field"><label>Living situation</label>
+      <select id="f_residentialStatus">
+        <option value="own_bonded">Own home (bond)</option>
+        <option value="own_paid_off">Own home (paid off)</option>
+        <option value="renting">Renting</option>
+        <option value="living_with_family">Living with family</option>
+      </select>
+    </div>
+    <div class="field">
+      <label><input type="checkbox" id="f_underDebtReview" /> Customer is currently under debt review (this will block the application — legal requirement)</label>
+    </div>
+    <div class="field" style="background: rgba(200,155,42,0.12); padding: 12px; border-radius: 10px;">
+      <label style="display:block; margin-bottom:6px;"><input type="checkbox" id="f_creditBureauConsent" /> Customer consents to a credit bureau check</label>
+      <label style="display:block;"><input type="checkbox" id="f_declarationsAccepted" /> Customer confirms: information is true and complete, nothing withheld, authorises verification, understands this doesn't guarantee approval</label>
+    </div>
+
     <div class="field">
       <label>Employment type</label>
       <select id="f_employmentType">
@@ -70,12 +94,22 @@
         <option value="informal">Informal / piece work</option>
       </select>
     </div>
+    <div class="field"><label>Employer / business name (optional)</label><input id="f_employerName" type="text" /></div>
+    <div class="field"><label>Employer phone number (optional)</label><input id="f_employerPhone" type="text" /></div>
     <div class="field"><label>Months in current job/business</label><input id="f_monthsEmployed" type="number" /></div>
+    <div class="field"><label>Salary payment date (e.g. "25th" or "last working day")</label><input id="f_salaryPaymentDate" type="text" placeholder="25th" /></div>
     <div class="field"><label>Net monthly income (R)</label><input id="f_netMonthlyIncome" type="number" /></div>
-    <div class="field"><label>Monthly expenses (R)</label><input id="f_monthlyExpenses" type="number" /></div>
-    <div class="field"><label>Existing debt instalments (R, 0 if none)</label><input id="f_existingDebtInstalments" type="number" value="0" /></div>
+    <div class="field"><label>Average commission/overtime, last 3 months (R, 0 if none)</label><input id="f_averageCommission3mo" type="number" value="0" /></div>
+    <div class="field"><label>Monthly living expenses (R) — rent, food, transport, not other debt</label><input id="f_monthlyExpenses" type="number" /></div>
+
+    <div class="field">
+      <label>Other loans/accounts (one per line: Provider, type, balance, instalment — leave blank if none)</label>
+      <textarea id="f_existingDebts" rows="2" placeholder="Capfin, personal loan, 5000, 800"></textarea>
+    </div>
+
     <div class="field"><label>Loan amount requested (R)</label><input id="f_requestedAmount" type="number" /></div>
     <div class="field"><label>Term (months)</label><input id="f_termMonths" type="number" value="6" /></div>
+    <div class="field"><label>Purpose of loan</label><input id="f_loanPurpose" type="text" placeholder="e.g. emergency, school fees" /></div>
 
     <h3 class="display" style="margin-bottom:8px;">Payout bank account (must be customer's own)</h3>
     <div class="field"><label>Account holder full name</label><input id="f_bankAccountHolder" type="text" /></div>

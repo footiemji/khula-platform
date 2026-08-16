@@ -214,6 +214,61 @@
           return;
         }
         state.data.popiaConsent = true;
+        state.step = 'ask_marital_status';
+        await botSay('Marital status?', [
+          { label: 'Single', value: 'single' },
+          { label: 'Married in community of property', value: 'married_in_community' },
+          { label: 'Married out of community of property', value: 'married_out_of_community' },
+          { label: 'Divorced / widowed', value: 'divorced_widowed' },
+        ]);
+        break;
+
+      case 'ask_marital_status':
+        state.data.maritalStatus = text;
+        state.step = 'ask_residential_status';
+        await botSay('And your living situation?', [
+          { label: 'Own home (bond)', value: 'own_bonded' },
+          { label: 'Own home (paid off)', value: 'own_paid_off' },
+          { label: 'Renting', value: 'renting' },
+          { label: 'Living with family', value: 'living_with_family' },
+        ]);
+        break;
+
+      case 'ask_residential_status':
+        state.data.residentialStatus = text;
+        state.step = 'ask_debt_review';
+        await botSay('Are you currently under debt review?', [
+          { label: 'No', value: 'no' },
+          { label: 'Yes', value: 'yes' },
+        ]);
+        break;
+
+      case 'ask_debt_review':
+        state.data.underDebtReview = /^y(es)?$/i.test(text);
+        if (state.data.underDebtReview) {
+          await botSay("We're not able to proceed with an application while you're under debt review — this is a legal requirement, not a Khula policy choice. Once your debt review ends, we'd be glad to help.");
+          state.step = 'done';
+          return;
+        }
+        state.step = 'ask_declarations';
+        await botSay(
+          "A few more things to confirm before we continue — please review and accept all of these:\n\n" +
+          "✓ I consent to a credit bureau check being run on my profile\n" +
+          "✓ All information I provide is true, accurate, and complete\n" +
+          "✓ I have not withheld anything that could affect this decision\n" +
+          "✓ I authorise Khula to verify the information I provide\n" +
+          "✓ I understand this does not guarantee approval",
+          [{ label: 'I accept all of the above', value: 'accept' }]
+        );
+        break;
+
+      case 'ask_declarations':
+        if (!/^accept$/i.test(text) && !/^yes$/i.test(text)) {
+          await botSay("We need your agreement to continue.", [{ label: 'I accept all of the above', value: 'accept' }]);
+          return;
+        }
+        state.data.creditBureauConsent = true;
+        state.data.declarationsAccepted = true;
         state.step = 'ask_employment';
         await botSay('What best describes your employment?', [
           { label: 'Permanent employee', value: 'formal_permanent' },
@@ -225,14 +280,29 @@
 
       case 'ask_employment':
         state.data.employmentType = text;
-        state.step = 'ask_months';
-        await botSay('How many months have you been in your current job or business?');
+        state.step = 'ask_employer_details';
+        await botSay("Employer or business name, and their phone number? One message like: ABC Traders, 0115551234\n\n(Reply 'skip' if self-employed or informal with no fixed employer)");
         break;
 
+      case 'ask_employer_details': {
+        if (/^skip$/i.test(text.trim())) {
+          state.data.employerName = null;
+          state.data.employerPhone = null;
+        } else {
+          const parts = text.split(',').map((p) => p.trim());
+          state.data.employerName = parts[0] || null;
+          state.data.employerPhone = parts[1] || null;
+        }
+        state.step = 'ask_months';
+        await botSay("How many months have you been in your current job or business, and what day of the month do you get paid? One message like: 18 months, 25th\n\n(If paid on the last working day, just say 'last')");
+        break;
+      }
+
       case 'ask_months': {
-        const months = Number(text.replace(/[^\d.]/g, ''));
-        if (!months && months !== 0) { await botSay('Please send just the number of months, e.g. 18'); return; }
-        state.data.monthsEmployed = months;
+        const monthsMatch = text.match(/\d+/);
+        if (!monthsMatch) { await botSay("Please include how many months, e.g. '18 months, 25th'"); return; }
+        state.data.monthsEmployed = parseInt(monthsMatch[0], 10);
+        state.data.salaryPaymentDate = (text.split(',')[1] || text).trim();
         state.step = 'ask_income';
         await botSay("What's your average NET monthly income (after tax), in Rand? e.g. 8500");
         break;
@@ -242,8 +312,18 @@
         const income = Number(text.replace(/[^\d.]/g, ''));
         if (!income) { await botSay('Please send just the number, e.g. 8500'); return; }
         state.data.netMonthlyIncome = income;
+        state.step = 'ask_commission';
+        await botSay("Any regular commission or overtime (average over the last 3 months)? Reply with the Rand amount, or '0' if none.");
+        break;
+      }
+
+      case 'ask_commission': {
+        const amount = Number(text.replace(/[^\d.]/g, ''));
+        if (isNaN(amount)) { await botSay("Please reply with a number, or '0' if none."); return; }
+        state.data.averageCommission3mo = amount;
+        state.data.averageOvertime3mo = 0;
         state.step = 'ask_expenses';
-        await botSay('And your average monthly expenses (rent, food, transport)?');
+        await botSay('And your average monthly living expenses (rent, food, transport — not including other debt)?');
         break;
       }
 
@@ -252,16 +332,21 @@
         if (isNaN(expenses)) { await botSay('Please send just the number, e.g. 4200'); return; }
         state.data.monthlyExpenses = expenses;
         state.step = 'ask_debt';
-        await botSay('Do you currently pay any other loan or credit instalments each month? If yes, how much in total? Reply 0 if none.');
+        await botSay("Any other loans or accounts (store cards, other lenders)? List each on its own line like:\nCapfin, personal loan, 5000, 800\n\n(Provider, type, balance owed, monthly instalment)", [{ label: "I don't have any", value: 'none' }]);
         break;
       }
 
       case 'ask_debt': {
-        const debt = Number(text.replace(/[^\d.]/g, ''));
-        if (isNaN(debt)) { await botSay('Please send just the number, e.g. 0 or 850'); return; }
-        state.data.existingDebtInstalments = debt;
+        if (/^none$/i.test(text.trim())) {
+          state.data.existingDebts = [];
+        } else {
+          state.data.existingDebts = text.split('\n').map((line) => {
+            const parts = line.split(',').map((p) => p.trim());
+            return { provider: parts[0] || '', type: parts[1] || '', balance: Number(parts[2]) || 0, instalment: Number(parts[3]) || 0 };
+          }).filter((d) => d.provider);
+        }
         state.step = 'ask_amount';
-        await botSay('How much would you like to borrow? (Between R500 and R15,000)');
+        await botSay('How much would you like to borrow? (Between R500 and R50,000)');
         break;
       }
 
@@ -280,12 +365,18 @@
 
       case 'ask_term': {
         const term = Number(text.replace(/[^\d.]/g, ''));
-        if (!term || term < 1 || term > 36) { await botSay('Please reply with a number of months between 1 and 36.'); return; }
+        if (!term || term < 1 || term > 60) { await botSay('Please reply with a number of months between 1 and 60.'); return; }
         state.data.termMonths = term;
+        state.step = 'ask_purpose';
+        await botSay("What's the loan for? (e.g. emergency, school fees, medical, home repairs)");
+        break;
+      }
+
+      case 'ask_purpose':
+        state.data.loanPurpose = text;
         state.step = 'ask_bank_holder';
         await botSay("Almost done — I need your payout bank details. This account must be in your own name, so we can pay your loan directly to you.\n\nWhat's the account holder's full name?");
         break;
-      }
 
       case 'ask_bank_holder':
         state.data.bankAccountHolder = text;

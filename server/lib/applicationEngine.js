@@ -9,6 +9,7 @@ const db = require('./db');
 const { assessAffordability } = require('./affordability');
 const { scoreApplication, decide } = require('./riskScore');
 const { checkVerificationToken } = require('./otp');
+const { checkHardGates } = require('./hardGates');
 
 function generateReference() {
   const stamp = Date.now().toString(36).toUpperCase();
@@ -48,7 +49,7 @@ function messageForDecision(decisionType, record, baseUrl) {
     case 'manual_review':
       return `Thanks ${record.fullName.split(' ')[0]}. Your application (${record.reference}) needs a quick human review — we'll be in touch on WhatsApp within 1 business day.`;
     case 'declined':
-      return record.affordability.suggestedAmount
+      return record.affordability?.suggestedAmount
         ? `Based on what you shared, R${record.requestedAmount} isn't affordable right now, but R${record.affordability.suggestedAmount} over the same term looks manageable. Reply to try that amount.`
         : `Based on what you shared, we can't offer a loan right now. Reference ${record.reference}.`;
     default:
@@ -73,14 +74,32 @@ async function createApplication(input, options = {}) {
     fullName,
     idNumber,
     phoneNumber,
+    alternatePhoneNumber,
+    email,
     employmentType,
+    employerName,
+    employerAddress,
+    employerPhone,
+    jobTitle,
     monthsEmployed,
+    salaryPaymentDate,
     netMonthlyIncome,
+    grossMonthlyIncome,
+    averageCommission3mo,
+    averageOvertime3mo,
     monthlyExpenses,
-    existingDebtInstalments,
+    existingDebts, // array of { provider, type, balance, instalment } — replaces the old single existingDebtInstalments number
     requestedAmount,
     termMonths,
+    loanPurpose,
+    maritalStatus, // 'single' | 'married_in_community' | 'married_out_of_community' | 'divorced_widowed'
+    residentialStatus, // 'own_bonded' | 'own_paid_off' | 'renting' | 'living_with_family'
+    nationality, // 'sa_citizen' | 'permanent_resident'
+    underDebtReview,
+    isUnrehabilitatedInsolvent,
     popiaConsent,
+    creditBureauConsent,
+    declarationsAccepted, // single boolean covering the batched declaration set — see messageForDecision/UI for the itemized list shown to the applicant
     phoneVerificationToken,
     bankAccountHolder,
     bankName,
@@ -88,8 +107,15 @@ async function createApplication(input, options = {}) {
     branchCode,
   } = input || {};
 
+  // ---- Consent & declarations (04_POPIA_Privacy_Notice + 07_Loan_Application_Form Section H) ----
   if (!popiaConsent) {
     return { ok: false, status: 400, error: 'POPIA consent is required before we can process an application.' };
+  }
+  if (!creditBureauConsent) {
+    return { ok: false, status: 400, error: 'Credit bureau consent is required before we can process an application.' };
+  }
+  if (!declarationsAccepted) {
+    return { ok: false, status: 400, error: 'You must accept the applicant declarations before we can process an application.' };
   }
   if (!fullName || !idNumber || !phoneNumber) {
     return { ok: false, status: 400, error: 'Full name, ID number and phone number are required.' };
@@ -120,6 +146,25 @@ async function createApplication(input, options = {}) {
     return { ok: false, status: 400, error: 'Account number looks invalid — please check and re-enter.' };
   }
 
+  // ---- Hard eligibility gates (04_Underwriting_Policy.docx Section 3) ----
+  // These are bright-line disqualifiers, checked BEFORE affordability —
+  // there's no path to approval regardless of how affordable the loan
+  // looks if one of these fires.
+  const gateResult = await checkHardGates({ idNumber: idClean, underDebtReview, isUnrehabilitatedInsolvent });
+  if (gateResult.blocked) {
+    return { ok: false, status: 400, error: gateResult.reasons.join(' ') };
+  }
+
+  // ---- Itemized existing debts (replaces the old single aggregate number) ----
+  const debtsList = Array.isArray(existingDebts) ? existingDebts.filter((d) => d && (d.balance || d.instalment)) : [];
+  const totalExistingDebtInstalments = debtsList.reduce((sum, d) => sum + (Number(d.instalment) || 0), 0);
+
+  // ---- Income calc with commission/overtime averaged at 50% (Underwriting Policy 5.1) ----
+  const declaredNetIncome = Number(netMonthlyIncome) || 0;
+  const commissionComponent = (Number(averageCommission3mo) || 0) * 0.5;
+  const overtimeComponent = (Number(averageOvertime3mo) || 0) * 0.5;
+  const effectiveNetIncome = declaredNetIncome + commissionComponent + overtimeComponent;
+
   const previousLoans = await db.filter('applications', (a) => a.idNumber === idClean && a.decision === 'approved');
   const thisCalendarYear = new Date().getFullYear();
   const previousLoansThisYear = previousLoans.filter((a) => new Date(a.createdAt).getFullYear() === thisCalendarYear);
@@ -127,9 +172,9 @@ async function createApplication(input, options = {}) {
   const missedPayments = previousLoans.filter((a) => a.repaymentStatus === 'missed').length;
 
   const affordability = assessAffordability({
-    netMonthlyIncome: Number(netMonthlyIncome),
+    netMonthlyIncome: effectiveNetIncome,
     monthlyExpenses: Number(monthlyExpenses),
-    existingDebtInstalments: Number(existingDebtInstalments || 0),
+    existingDebtInstalments: totalExistingDebtInstalments,
     requestedAmount: Number(requestedAmount),
     termMonths: Number(termMonths),
     isFirstLoan,
@@ -142,8 +187,8 @@ async function createApplication(input, options = {}) {
   const risk = scoreApplication({
     employmentType,
     monthsEmployed: Number(monthsEmployed || 0),
-    netMonthlyIncome: Number(netMonthlyIncome),
-    existingDebtInstalments: Number(existingDebtInstalments || 0),
+    netMonthlyIncome: effectiveNetIncome,
+    existingDebtInstalments: totalExistingDebtInstalments,
     requestedAmount: Number(requestedAmount),
     previousLoansWithKhula: previousLoans.length,
     missedPaymentsWithKhula: missedPayments,
@@ -161,17 +206,39 @@ async function createApplication(input, options = {}) {
     decision: outcome.decision,
     fullName,
     idNumber: idClean,
+    ageAtApplication: gateResult.age,
     phoneNumber,
+    alternatePhoneNumber: alternatePhoneNumber || null,
+    email: email || null,
     phoneVerified: channel === 'whatsapp' ? true : Boolean(phoneVerificationToken),
+    maritalStatus: maritalStatus || null,
+    residentialStatus: residentialStatus || null,
+    nationality: nationality || null,
     employmentType,
+    employerName: employerName || null,
+    employerAddress: employerAddress || null,
+    employerPhone: employerPhone || null,
+    jobTitle: jobTitle || null,
     monthsEmployed: Number(monthsEmployed || 0),
-    netMonthlyIncome: Number(netMonthlyIncome),
+    salaryPaymentDate: salaryPaymentDate || null,
+    netMonthlyIncome: declaredNetIncome,
+    grossMonthlyIncome: grossMonthlyIncome ? Number(grossMonthlyIncome) : null,
+    averageCommission3mo: averageCommission3mo ? Number(averageCommission3mo) : 0,
+    averageOvertime3mo: averageOvertime3mo ? Number(averageOvertime3mo) : 0,
+    effectiveNetIncome,
     monthlyExpenses: Number(monthlyExpenses),
-    existingDebtInstalments: Number(existingDebtInstalments || 0),
+    existingDebts: debtsList,
+    existingDebtInstalments: totalExistingDebtInstalments,
     requestedAmount: Number(requestedAmount),
     termMonths: Number(termMonths),
+    loanPurpose: loanPurpose || null,
+    underDebtReview: Boolean(underDebtReview),
     popiaConsent: true,
     popiaConsentAt: new Date().toISOString(),
+    creditBureauConsent: true,
+    creditBureauConsentAt: new Date().toISOString(),
+    declarationsAccepted: true,
+    declarationsAcceptedAt: new Date().toISOString(),
     bankAccountHolder,
     bankName,
     accountNumber: accountClean,
@@ -198,12 +265,33 @@ async function createApplication(input, options = {}) {
       creditRecordClean: null,
       judgmentsOrDefaultsFound: null,
       notes: null,
+      // Declared vs. verified income — 05_Affordability_Assessment.docx
+      // Section B. Populated by admin during KYC review, not at
+      // application time — the applicant's own figures are what's used
+      // above; this is where a reviewer records what the documents
+      // actually show, if it differs.
+      verifiedNetMonthlyIncome: null,
+      verifiedMonthlyExpenses: null,
+      incomeVerificationNote: null,
     },
     collections: {
       debicheckStatus: 'not_started',
       mandateReference: null,
       mandateSentAt: null,
       mandateConfirmedAt: null,
+    },
+    legal: {
+      section129NoticeSent: false,
+      section129SentAt: null,
+      handedToCollector: false,
+      handedToCollectorAt: null,
+      collectorReference: null,
+      magistratesCourtJudgment: false,
+      judgmentDate: null,
+      judgmentReference: null,
+      enforcementMechanism: null, // 'eao' | 'garnishee' | 'warrant_of_execution' | null
+      enforcementInitiatedAt: null,
+      notes: [],
     },
     signature: null,
     reconsiderationDeadline: null,

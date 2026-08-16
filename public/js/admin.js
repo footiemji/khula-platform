@@ -82,6 +82,7 @@
           ${a.status === 'active' && a.collections?.debicheckStatus === 'not_started' ? `<button class="review-kyc" data-ref="${a.reference}" data-debicheck="1">Start DebiCheck</button>` : ''}
           ${a.status === 'active' && a.collections?.debicheckStatus && a.collections.debicheckStatus !== 'not_started' ? `<span style="font-size:11.5px;color:var(--ink-soft);">DebiCheck: ${a.collections.debicheckStatus.replace(/_/g, ' ')}</span>` : ''}
           ${['active', 'completed'].includes(a.status) && a.collections?.repaymentSchedule?.length ? `<button class="review-kyc" data-ref="${a.reference}" data-repayments="1">Repayments</button>` : ''}
+          ${a.status === 'active' && (a.collections?.repaymentSchedule || []).some(i => i.status === 'overdue') ? `<button class="review-kyc" data-ref="${a.reference}" data-legal="1" style="border-color:var(--danger);color:var(--danger);">Legal</button>` : ''}
           ${!['manual_review'].includes(a.decision) && a.status !== 'pending_kyc' && !(a.status === 'active') ? '—' : ''}
         </td>
       </tr>
@@ -114,6 +115,10 @@
 
     document.querySelectorAll('.row-actions button[data-repayments]').forEach((btn) => {
       btn.addEventListener('click', () => openRepaymentsModal(btn.dataset.ref));
+    });
+
+    document.querySelectorAll('.row-actions button[data-legal]').forEach((btn) => {
+      btn.addEventListener('click', () => openLegalModal(btn.dataset.ref));
     });
   }
 
@@ -418,6 +423,111 @@
         const updated = await res.json();
         if (res.ok) { renderRepaymentsModal(updated); await refresh(); }
       });
+    });
+  }
+
+  // ---------------- Legal / collections escalation modal ----------------
+  // Mirrors the actual legal sequence: Section 129 notice -> handover to a
+  // collector/attorney -> Magistrate's Court judgment -> enforcement
+  // (EAO/garnishee/warrant). Khula cannot use Small Claims Court as a
+  // company (Small Claims Courts Act s7(1)), and an EAO/garnishee can only
+  // be pursued AFTER a judgment already exists — the UI below enforces
+  // that same order, not just the backend.
+  async function openLegalModal(reference) {
+    kycBody.innerHTML = '<p>Loading…</p>';
+    kycModal.style.display = 'flex';
+    try {
+      const res = await authedFetch(`/api/admin/applications`);
+      const apps = await res.json();
+      const app = apps.find((a) => a.reference === reference);
+      if (!app) { kycBody.innerHTML = '<p>Application not found.</p>'; return; }
+      renderLegalModal(app);
+    } catch {
+      kycBody.innerHTML = '<p>Could not load application.</p>';
+    }
+  }
+
+  function renderLegalModal(app) {
+    const legal = app.legal || {};
+    const overdueCount = (app.collections?.repaymentSchedule || []).filter((i) => i.status === 'overdue').length;
+
+    kycBody.innerHTML = `
+      <h3 class="display" style="margin-top:0;">${app.fullName} · ${app.reference}</h3>
+      <p style="color:var(--ink-soft);font-size:13px;">${overdueCount} instalment${overdueCount === 1 ? '' : 's'} overdue</p>
+
+      <div class="kyc-quote-box">
+        <strong>Step 1 — Section 129 notice</strong><br>
+        ${legal.section129NoticeSent
+          ? `Sent ${new Date(legal.section129SentAt).toLocaleDateString('en-ZA')}`
+          : `<button class="btn-primary" id="sendSection129Btn" style="background:var(--forest); margin-top:6px;">Mark Section 129 notice as sent</button>`}
+      </div>
+
+      <div class="kyc-quote-box" style="${legal.section129NoticeSent ? '' : 'opacity:0.5;'}">
+        <strong>Step 2 — Hand to collector / attorney</strong><br>
+        ${legal.handedToCollector
+          ? `Handed over ${new Date(legal.handedToCollectorAt).toLocaleDateString('en-ZA')}${legal.collectorReference ? ` · Ref: ${legal.collectorReference}` : ''}`
+          : legal.section129NoticeSent
+            ? `<input type="text" id="collectorRefInput" placeholder="Collector/attorney reference (optional)" style="width:100%; margin:6px 0; padding:6px; border-radius:6px; border:1px solid rgba(22,50,26,0.2);" /><button class="btn-primary" id="handoverBtn" style="background:var(--forest);">Mark handed over</button>`
+            : `<span style="font-size:12px; color:var(--ink-soft);">Send the Section 129 notice first</span>`}
+      </div>
+
+      <div class="kyc-quote-box" style="${legal.handedToCollector ? '' : 'opacity:0.5;'}">
+        <strong>Step 3 — Magistrate's Court judgment</strong><br>
+        ${legal.magistratesCourtJudgment
+          ? `Recorded ${new Date(legal.judgmentDate).toLocaleDateString('en-ZA')}${legal.judgmentReference ? ` · Ref: ${legal.judgmentReference}` : ''}`
+          : legal.handedToCollector
+            ? `<input type="text" id="judgmentRefInput" placeholder="Case/judgment reference" style="width:100%; margin:6px 0; padding:6px; border-radius:6px; border:1px solid rgba(22,50,26,0.2);" /><button class="btn-primary" id="judgmentBtn" style="background:var(--forest);">Record judgment</button>`
+            : `<span style="font-size:12px; color:var(--ink-soft);">Hand this case to a collector/attorney first</span>`}
+      </div>
+
+      <div class="kyc-quote-box" style="${legal.magistratesCourtJudgment ? '' : 'opacity:0.5;'}">
+        <strong>Step 4 — Enforcement</strong><br>
+        ${legal.enforcementMechanism
+          ? `${legal.enforcementMechanism.toUpperCase()} initiated ${new Date(legal.enforcementInitiatedAt).toLocaleDateString('en-ZA')}`
+          : legal.magistratesCourtJudgment
+            ? `<select id="enforcementSelect" style="width:100%; margin:6px 0; padding:6px; border-radius:6px; border:1px solid rgba(22,50,26,0.2);">
+                <option value="eao">Emoluments Attachment Order (salary)</option>
+                <option value="garnishee">Garnishee order (bank funds)</option>
+                <option value="warrant_of_execution">Warrant of execution (movable property)</option>
+              </select><button class="btn-primary" id="enforcementBtn" style="background:var(--danger);">Initiate enforcement</button>`
+            : `<span style="font-size:12px; color:var(--ink-soft);">Record a judgment first — an EAO/garnishee cannot be applied for before one exists</span>`}
+      </div>
+
+      <button class="btn-primary" id="closeLegalBtn" style="background:transparent;color:var(--ink);border:1px solid rgba(22,50,26,0.2); margin-top:10px;">Close</button>
+    `;
+
+    document.getElementById('closeLegalBtn').addEventListener('click', () => { kycModal.style.display = 'none'; });
+
+    const s129Btn = document.getElementById('sendSection129Btn');
+    if (s129Btn) s129Btn.addEventListener('click', async () => {
+      const res = await authedFetch(`/api/admin/applications/${app.reference}/legal/section129`, { method: 'POST' });
+      const updated = await res.json();
+      if (res.ok) { renderLegalModal(updated); await refresh(); }
+    });
+
+    const handoverBtn = document.getElementById('handoverBtn');
+    if (handoverBtn) handoverBtn.addEventListener('click', async () => {
+      const collectorReference = document.getElementById('collectorRefInput').value;
+      const res = await authedFetch(`/api/admin/applications/${app.reference}/legal/handover`, { method: 'POST', body: JSON.stringify({ collectorReference }) });
+      const updated = await res.json();
+      if (res.ok) { renderLegalModal(updated); await refresh(); }
+    });
+
+    const judgmentBtn = document.getElementById('judgmentBtn');
+    if (judgmentBtn) judgmentBtn.addEventListener('click', async () => {
+      const judgmentReference = document.getElementById('judgmentRefInput').value;
+      const res = await authedFetch(`/api/admin/applications/${app.reference}/legal/judgment`, { method: 'POST', body: JSON.stringify({ judgmentReference }) });
+      const updated = await res.json();
+      if (res.ok) { renderLegalModal(updated); await refresh(); }
+    });
+
+    const enforcementBtn = document.getElementById('enforcementBtn');
+    if (enforcementBtn) enforcementBtn.addEventListener('click', async () => {
+      const mechanism = document.getElementById('enforcementSelect').value;
+      if (!confirm(`Initiate ${mechanism} enforcement? This should only be done after real legal proceedings, not as a routine step.`)) return;
+      const res = await authedFetch(`/api/admin/applications/${app.reference}/legal/enforcement`, { method: 'POST', body: JSON.stringify({ mechanism }) });
+      const updated = await res.json();
+      if (res.ok) { renderLegalModal(updated); await refresh(); }
     });
   }
 

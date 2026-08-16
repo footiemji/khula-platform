@@ -7,6 +7,7 @@ const { readDocument } = require('../lib/documentStore');
 const { initiateMandate } = require('../lib/debicheck');
 const { sendThankYou } = require('../lib/reminders');
 const { runCollectionsSweep } = require('../lib/collectionsSweep');
+const { parseSalaryDayOfMonth } = require('../lib/repaymentSchedule');
 const asyncHandler = require('../lib/asyncHandler');
 
 const router = express.Router();
@@ -60,13 +61,24 @@ router.get('/stats', requireAdmin, asyncHandler(async (req, res) => {
 // swap the manual entry for an API call and keep the same fields on
 // application.underwriting so nothing downstream has to change.
 router.post('/applications/:reference/underwriting', requireAdmin, asyncHandler(async (req, res) => {
-  const { employmentConfirmed, creditRecordClean, judgmentsOrDefaultsFound, notes } = req.body || {};
+  const { employmentConfirmed, creditRecordClean, judgmentsOrDefaultsFound, notes, verifiedNetMonthlyIncome, verifiedMonthlyExpenses, incomeVerificationNote } = req.body || {};
   const app = await db.find('applications', (a) => a.reference === req.params.reference);
   if (!app) return res.status(404).json({ error: 'Application not found.' });
+
+  // Flag when verified income is materially lower than what the applicant
+  // declared (>10% lower) — this is the actual point of capturing both
+  // figures, not just recording them side by side for the file.
+  let incomeDiscrepancyFlag = app.underwriting?.incomeDiscrepancyFlag ?? false;
+  if (verifiedNetMonthlyIncome != null) {
+    const declared = app.netMonthlyIncome || 0;
+    const verified = Number(verifiedNetMonthlyIncome);
+    incomeDiscrepancyFlag = declared > 0 && verified < declared * 0.9;
+  }
 
   const updated = await db.update('applications', (a) => a.reference === req.params.reference, (a) => ({
     ...a,
     underwriting: {
+      ...a.underwriting,
       bureauChecked: true,
       bureauCheckedBy: req.admin.email,
       bureauCheckedAt: new Date().toISOString(),
@@ -74,6 +86,10 @@ router.post('/applications/:reference/underwriting', requireAdmin, asyncHandler(
       creditRecordClean: Boolean(creditRecordClean),
       judgmentsOrDefaultsFound: Boolean(judgmentsOrDefaultsFound),
       notes: notes || null,
+      verifiedNetMonthlyIncome: verifiedNetMonthlyIncome != null ? Number(verifiedNetMonthlyIncome) : (a.underwriting?.verifiedNetMonthlyIncome ?? null),
+      verifiedMonthlyExpenses: verifiedMonthlyExpenses != null ? Number(verifiedMonthlyExpenses) : (a.underwriting?.verifiedMonthlyExpenses ?? null),
+      incomeVerificationNote: incomeVerificationNote || (a.underwriting?.incomeVerificationNote ?? null),
+      incomeDiscrepancyFlag,
     },
   }));
   res.json(updated);
@@ -208,6 +224,8 @@ router.post('/applications/:reference/debicheck', requireAdmin, asyncHandler(asy
     return res.status(400).json({ error: `A DebiCheck mandate has already been initiated for this loan (status: ${app.collections.debicheckStatus}). Cancel it with your provider first if you need to resend.` });
   }
 
+  const preferredDay = parseSalaryDayOfMonth(app.salaryPaymentDate);
+
   const result = await initiateMandate({
     reference: app.reference,
     accountHolder: app.bankAccountHolder,
@@ -215,7 +233,7 @@ router.post('/applications/:reference/debicheck', requireAdmin, asyncHandler(asy
     accountNumber: app.accountNumber,
     branchCode: app.branchCode,
     instalmentAmount: app.affordability?.quotation?.firstMonthInstalment,
-    instalmentDay: new Date(app.signature?.signedAt || Date.now()).getDate(),
+    instalmentDay: preferredDay || new Date(app.signature?.signedAt || Date.now()).getDate(),
   });
 
   const updated = await db.update('applications', (a) => a.reference === req.params.reference, (a) => ({
@@ -339,6 +357,110 @@ router.post('/applications/:reference/repayments/:installmentNumber/mark-paid', 
 router.post('/collections/run-sweep', requireAdmin, asyncHandler(async (req, res) => {
   const results = await runCollectionsSweep();
   res.json(results);
+}));
+
+// ---------------- Legal / collections escalation ----------------
+// Tracks the ladder from soft collections through to enforcement. Every
+// step here is a manual admin action, deliberately — actual legal
+// escalation (sending a Section 129 notice, handing a case to a collector,
+// pursuing a court judgment) should always be a human decision, not
+// something the system does on its own on a timer. See docs/VISION.md and
+// the compliance review this was built from for why: Khula (as a company)
+// cannot itself use Small Claims Court, and an EAO/garnishee order can
+// only be applied for AFTER a Magistrate's Court judgment already exists —
+// this is enforcement tracking, not a first-line collections tool.
+
+// POST /api/admin/applications/:reference/legal/section129
+router.post('/applications/:reference/legal/section129', requireAdmin, asyncHandler(async (req, res) => {
+  const { note } = req.body || {};
+  const app = await db.find('applications', (a) => a.reference === req.params.reference);
+  if (!app) return res.status(404).json({ error: 'Application not found.' });
+
+  const sentAt = new Date().toISOString();
+  const updated = await db.update('applications', (a) => a.reference === req.params.reference, (a) => ({
+    ...a,
+    legal: {
+      ...a.legal,
+      section129NoticeSent: true,
+      section129SentAt: sentAt,
+      notes: [...(a.legal?.notes || []), { action: 'section129_sent', at: sentAt, by: req.admin.email, note: note || null }],
+    },
+  }));
+  res.json(updated);
+}));
+
+// POST /api/admin/applications/:reference/legal/handover  { collectorReference, note }
+router.post('/applications/:reference/legal/handover', requireAdmin, asyncHandler(async (req, res) => {
+  const { collectorReference, note } = req.body || {};
+  const app = await db.find('applications', (a) => a.reference === req.params.reference);
+  if (!app) return res.status(404).json({ error: 'Application not found.' });
+  if (!app.legal?.section129NoticeSent) {
+    return res.status(400).json({ error: 'Send the Section 129 notice before handing this case to a collector/attorney.' });
+  }
+
+  const handedAt = new Date().toISOString();
+  const updated = await db.update('applications', (a) => a.reference === req.params.reference, (a) => ({
+    ...a,
+    legal: {
+      ...a.legal,
+      handedToCollector: true,
+      handedToCollectorAt: handedAt,
+      collectorReference: collectorReference || null,
+      notes: [...(a.legal?.notes || []), { action: 'handed_to_collector', at: handedAt, by: req.admin.email, note: note || null }],
+    },
+  }));
+  res.json(updated);
+}));
+
+// POST /api/admin/applications/:reference/legal/judgment  { judgmentReference, judgmentDate, note }
+// A Magistrate's Court judgment — NOT Small Claims Court, which Khula
+// cannot use as a company (Small Claims Courts Act s7(1) restricts
+// plaintiffs to natural persons).
+router.post('/applications/:reference/legal/judgment', requireAdmin, asyncHandler(async (req, res) => {
+  const { judgmentReference, judgmentDate, note } = req.body || {};
+  const app = await db.find('applications', (a) => a.reference === req.params.reference);
+  if (!app) return res.status(404).json({ error: 'Application not found.' });
+  if (!app.legal?.handedToCollector) {
+    return res.status(400).json({ error: 'Hand this case to a collector/attorney before recording a court judgment.' });
+  }
+
+  const recordedAt = new Date().toISOString();
+  const updated = await db.update('applications', (a) => a.reference === req.params.reference, (a) => ({
+    ...a,
+    legal: {
+      ...a.legal,
+      magistratesCourtJudgment: true,
+      judgmentDate: judgmentDate || recordedAt,
+      judgmentReference: judgmentReference || null,
+      notes: [...(a.legal?.notes || []), { action: 'judgment_recorded', at: recordedAt, by: req.admin.email, note: note || null }],
+    },
+  }));
+  res.json(updated);
+}));
+
+// POST /api/admin/applications/:reference/legal/enforcement  { mechanism: 'eao'|'garnishee'|'warrant_of_execution', note }
+router.post('/applications/:reference/legal/enforcement', requireAdmin, asyncHandler(async (req, res) => {
+  const { mechanism, note } = req.body || {};
+  if (!['eao', 'garnishee', 'warrant_of_execution'].includes(mechanism)) {
+    return res.status(400).json({ error: 'mechanism must be "eao", "garnishee", or "warrant_of_execution".' });
+  }
+  const app = await db.find('applications', (a) => a.reference === req.params.reference);
+  if (!app) return res.status(404).json({ error: 'Application not found.' });
+  if (!app.legal?.magistratesCourtJudgment) {
+    return res.status(400).json({ error: 'An EAO, garnishee order, or warrant of execution can only be pursued AFTER a Magistrate\'s Court judgment — record the judgment first.' });
+  }
+
+  const initiatedAt = new Date().toISOString();
+  const updated = await db.update('applications', (a) => a.reference === req.params.reference, (a) => ({
+    ...a,
+    legal: {
+      ...a.legal,
+      enforcementMechanism: mechanism,
+      enforcementInitiatedAt: initiatedAt,
+      notes: [...(a.legal?.notes || []), { action: `enforcement_${mechanism}_initiated`, at: initiatedAt, by: req.admin.email, note: note || null }],
+    },
+  }));
+  res.json(updated);
 }));
 
 module.exports = router;

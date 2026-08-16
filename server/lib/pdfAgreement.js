@@ -70,7 +70,7 @@ function streamPreAgreementPDF(res, app, reconsiderationDays = 5) {
     kv(doc, [
       ['Principal amount', fmtZAR(app.requestedAmount)],
       ['Term', `${app.termMonths} months`],
-      ['Interest rate', `${(q.monthlyInterestRate * 100).toFixed(1)}% per month${q.isFirstLoan ? ' (first loan rate)' : ' (repeat loan rate)'}`],
+      ['Interest rate', `${(q.monthlyInterestRate * 100).toFixed(1)}% per month`],
       ['Initiation fee (once-off)', fmtZAR(q.initiationFee)],
       ['Monthly service fee', fmtZAR(q.monthlyServiceFee)],
       ['Credit life insurance (first month)', `${fmtZAR(q.schedule[0].insurancePremium)} — reduces as you repay`],
@@ -111,10 +111,32 @@ function streamPreAgreementPDF(res, app, reconsiderationDays = 5) {
   section(doc, 'Affordability summary');
   kv(doc, [
     ['Net monthly income (as declared)', fmtZAR(app.netMonthlyIncome)],
-    ['Monthly expenses (as declared)', fmtZAR(app.monthlyExpenses)],
-    ['Existing debt instalments (as declared)', fmtZAR(app.existingDebtInstalments)],
+    ['Monthly living expenses (as declared)', fmtZAR(app.affordability?.declaredExpenses ?? app.monthlyExpenses)],
+    ['Existing debt instalments (total)', fmtZAR(app.existingDebtInstalments)],
     ['Discretionary income after this loan', fmtZAR(app.affordability?.discretionaryIncome)],
   ]);
+  if (app.affordability?.expenseFloorApplied) {
+    doc.fontSize(8).font('Helvetica').fillColor(INK_SOFT).text(
+      `Note: your affordability assessment used a minimum expense figure of ${fmtZAR(app.affordability.deemedMinimumExpense)} for your income band, since this is higher than what you declared — this protects against under-estimating your real cost of living.`,
+      { width: 495 }
+    );
+  }
+
+  if (app.existingDebts && app.existingDebts.length > 0) {
+    doc.moveDown(0.4);
+    doc.fontSize(9).font('Helvetica-Bold').fillColor(INK).text('Existing credit obligations declared:', 50);
+    app.existingDebts.forEach((d) => {
+      doc.fontSize(8.5).font('Helvetica').fillColor(INK_SOFT).text(
+        `• ${d.provider} (${d.type}) — balance ${fmtZAR(d.balance)}, instalment ${fmtZAR(d.instalment)}/month`,
+        { width: 495 }
+      );
+    });
+  }
+
+  if (app.loanPurpose) {
+    doc.moveDown(0.4);
+    doc.fontSize(9).font('Helvetica').fillColor(INK_SOFT).text(`Stated purpose of loan: ${app.loanPurpose}`, { width: 495 });
+  }
 
   doc.moveDown(0.8);
   section(doc, 'Your rights');
@@ -131,6 +153,16 @@ function streamPreAgreementPDF(res, app, reconsiderationDays = 5) {
     `You consented to Khula processing your personal information for this application on ${app.popiaConsentAt ? new Date(app.popiaConsentAt).toLocaleString('en-ZA') : 'the date of application'}. Your information is used solely to assess and manage this loan unless you separately consent to other uses. You may request access to, correction of, or deletion of your information at any time.`,
     { width: 495 }
   );
+
+  doc.moveDown(0.6);
+  section(doc, 'Declarations you made at application');
+  bullets(doc, [
+    'You consented to Khula processing your personal information under POPIA.',
+    'You consented to a credit bureau check being run on your profile.',
+    'You confirmed all information provided is true, accurate, and complete, and that nothing material was withheld.',
+    'You authorised Khula to verify the information you provided.',
+    'You acknowledged that this application does not guarantee approval.',
+  ]);
 
   doc.moveDown(1.2);
   doc.fontSize(8).fillColor(INK_SOFT).text(

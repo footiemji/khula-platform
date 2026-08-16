@@ -1,10 +1,26 @@
 const express = require('express');
 const db = require('../lib/db');
-const { assessAffordability } = require('../lib/affordability');
-const { scoreApplication, decide } = require('../lib/riskScore');
 const { sendWhatsAppMessage } = require('../lib/whatsappSender');
+const { createApplication } = require('../lib/applicationEngine');
 
 const router = express.Router();
+
+// Serializes processing per phone number. Without this, two messages
+// arriving close together from the same person (someone typing quickly,
+// or a retry from Meta) can interleave — both webhook calls read the
+// session before either has finished writing its update, so the second
+// message gets processed against stale state instead of the first
+// message's result. Different phone numbers still process fully in
+// parallel; only messages from the SAME conversation are forced to wait
+// their turn.
+const sessionQueues = new Map();
+
+function runSerialized(phone, task) {
+  const previous = sessionQueues.get(phone) || Promise.resolve();
+  const next = previous.then(task, task); // run task regardless of whether the previous one threw
+  sessionQueues.set(phone, next.catch(() => {})); // don't let one failure jam the queue for future messages
+  return next;
+}
 
 // ---------------------------------------------------------------------------
 // GET /api/whatsapp/webhook — Meta's verification handshake.
@@ -42,9 +58,11 @@ router.post('/webhook', async (req, res) => {
   const from = message.from; // WhatsApp user's phone number (E.164, no +)
   const text = (message.text?.body || '').trim();
 
-  const session = await getOrCreateSession(from);
-  const reply = await advanceConversation(session, text);
-  await sendWhatsAppMessage(from, reply);
+  runSerialized(from, async () => {
+    const session = await getOrCreateSession(from);
+    const reply = await advanceConversation(session, text);
+    await sendWhatsAppMessage(from, reply);
+  });
 });
 
 function getOrCreateSession(phone) {
@@ -62,22 +80,15 @@ async function saveSession(session) {
   await db.update('conversations', (c) => c.phone === session.phone, () => ({ ...session, updatedAt: new Date().toISOString() }));
 }
 
-const STEPS = [
-  'welcome',
-  'ask_name',
-  'ask_id',
-  'ask_consent',
-  'ask_employment',
-  'ask_income',
-  'ask_expenses',
-  'ask_amount',
-  'ask_term',
-  'done',
-];
-
 // A tiny, readable state machine. Each step reads the user's last reply,
-// stores it, and asks the next question. On the final step it calls the same
-// affordability + risk logic the web app uses.
+// stores it, and asks the next question. On the final step it calls the
+// same engine (server/lib/applicationEngine.js) the web widget and agent
+// console use — one shared path, so a hard gate or consent requirement
+// added there applies here too, not just on the other channels.
+//
+// Related fields are batched into single combined questions where doing so
+// doesn't lose anything — a WhatsApp conversation with 25 separate
+// round-trips would be worse UX than the form it's replacing, not better.
 async function advanceConversation(session, text) {
   switch (session.step) {
     case 'welcome':
@@ -96,15 +107,50 @@ async function advanceConversation(session, text) {
         return "That doesn't look like a valid 13-digit ID number. Please try again.";
       }
       session.data.idNumber = text.replace(/\s/g, '');
-      session.step = 'ask_consent';
+      session.step = 'ask_marital_status';
       await saveSession(session);
-      return 'Before we continue: do you consent to Khula processing your personal information under POPIA to assess this loan application? Reply YES to continue.';
+      return 'Marital status?\n1) Single\n2) Married in community of property\n3) Married out of community of property\n4) Divorced / widowed\n\nReply with a number 1-4.';
 
-    case 'ask_consent':
-      if (!/^y(es)?$/i.test(text)) {
-        return 'No problem — we need consent to proceed. Reply YES whenever you\'re ready.';
+    case 'ask_marital_status': {
+      const map = { 1: 'single', 2: 'married_in_community', 3: 'married_out_of_community', 4: 'divorced_widowed' };
+      const choice = map[text.trim()];
+      if (!choice) return 'Please reply with a number from 1 to 4.';
+      session.data.maritalStatus = choice;
+      session.step = 'ask_residential_status';
+      await saveSession(session);
+      return 'And your living situation?\n1) Own home (bond)\n2) Own home (paid off)\n3) Renting\n4) Living with family\n\nReply with a number 1-4.';
+    }
+
+    case 'ask_residential_status': {
+      const map = { 1: 'own_bonded', 2: 'own_paid_off', 3: 'renting', 4: 'living_with_family' };
+      const choice = map[text.trim()];
+      if (!choice) return 'Please reply with a number from 1 to 4.';
+      session.data.residentialStatus = choice;
+      session.step = 'ask_debt_review';
+      await saveSession(session);
+      return 'Are you currently under debt review? Reply YES or NO. (If yes, we won\'t be able to proceed — this is a legal requirement, not a Khula policy choice.)';
+    }
+
+    case 'ask_debt_review':
+      session.data.underDebtReview = /^y(es)?$/i.test(text.trim());
+      session.step = 'ask_consent_bundle';
+      await saveSession(session);
+      return 'Almost through the legal bits — please confirm ALL of the following by replying AGREE:\n\n' +
+        '✓ I consent to Khula processing my personal information under POPIA\n' +
+        '✓ I consent to a credit bureau check being run on my profile\n' +
+        '✓ All information I provide is true, accurate, and complete\n' +
+        '✓ I have not withheld anything that could affect this decision\n' +
+        '✓ I authorise Khula to verify the information I provide\n' +
+        '✓ I understand this does not guarantee approval\n\n' +
+        'Reply AGREE to continue, or STOP if you don\'t consent (we can\'t proceed without this).';
+
+    case 'ask_consent_bundle':
+      if (!/^agree$/i.test(text.trim())) {
+        return 'We need your agreement to all of the above to continue. Reply AGREE when you\'re ready, or STOP to end here.';
       }
       session.data.popiaConsent = true;
+      session.data.creditBureauConsent = true;
+      session.data.declarationsAccepted = true;
       session.step = 'ask_employment';
       await saveSession(session);
       return 'What best describes your employment?\n1) Permanent employee\n2) Contract employee\n3) Self-employed\n4) Informal / piece work\n5) Unemployed\n\nReply with a number 1-5.';
@@ -114,6 +160,31 @@ async function advanceConversation(session, text) {
       const choice = map[text.trim()];
       if (!choice) return 'Please reply with a number from 1 to 5.';
       session.data.employmentType = choice;
+      session.step = 'ask_employer_details';
+      await saveSession(session);
+      return "Employer/business name and their phone number, in one message like:\nABC Traders, 0115551234\n\n(Reply 'skip' if self-employed/informal with no fixed employer)";
+    }
+
+    case 'ask_employer_details': {
+      if (/^skip$/i.test(text.trim())) {
+        session.data.employerName = null;
+        session.data.employerPhone = null;
+      } else {
+        const parts = text.split(',').map((p) => p.trim());
+        session.data.employerName = parts[0] || null;
+        session.data.employerPhone = parts[1] || null;
+      }
+      session.step = 'ask_months_salary';
+      await saveSession(session);
+      return "How many months have you worked there, and what day of the month do you get paid? One message like:\n18 months, 25th\n\n(If paid on the last working day, just say 'last')";
+    }
+
+    case 'ask_months_salary': {
+      const monthsMatch = text.match(/\d+/);
+      if (!monthsMatch) return "Please include how many months, e.g. '18 months, 25th'";
+      session.data.monthsEmployed = parseInt(monthsMatch[0], 10);
+      const dayPart = text.split(',')[1] || text;
+      session.data.salaryPaymentDate = dayPart.trim();
       session.step = 'ask_income';
       await saveSession(session);
       return "What's your average NET monthly income (after tax), in Rand? e.g. 8500";
@@ -123,18 +194,42 @@ async function advanceConversation(session, text) {
       const income = Number(text.replace(/[^\d.]/g, ''));
       if (!income || income <= 0) return 'Please send just the number, e.g. 8500';
       session.data.netMonthlyIncome = income;
+      session.step = 'ask_commission_overtime';
+      await saveSession(session);
+      return "Any regular commission or overtime (average over the last 3 months)? Reply with the Rand amount, or '0' if none.";
+    }
+
+    case 'ask_commission_overtime': {
+      const amount = Number(text.replace(/[^\d.]/g, ''));
+      if (isNaN(amount)) return "Please reply with a number, or '0' if none.";
+      session.data.averageCommission3mo = amount;
+      session.data.averageOvertime3mo = 0;
       session.step = 'ask_expenses';
       await saveSession(session);
-      return "And your average monthly expenses (rent, food, transport, existing debt), in Rand?";
+      return "And your average monthly living expenses (rent, food, transport — not including other debt), in Rand?";
     }
 
     case 'ask_expenses': {
       const expenses = Number(text.replace(/[^\d.]/g, ''));
       if (expenses == null || isNaN(expenses) || expenses < 0) return 'Please send just the number, e.g. 4200';
       session.data.monthlyExpenses = expenses;
+      session.step = 'ask_debts';
+      await saveSession(session);
+      return "Any other loans or accounts (store cards, other lenders)? List each on its own line like:\nCapfin, personal loan, 5000, 800\n\n(Provider, type, balance owed, monthly instalment)\n\nOr reply 'none' if you don't have any.";
+    }
+
+    case 'ask_debts': {
+      if (/^none$/i.test(text.trim())) {
+        session.data.existingDebts = [];
+      } else {
+        session.data.existingDebts = text.split('\n').map((line) => {
+          const parts = line.split(',').map((p) => p.trim());
+          return { provider: parts[0] || '', type: parts[1] || '', balance: Number(parts[2]) || 0, instalment: Number(parts[3]) || 0 };
+        }).filter((d) => d.provider);
+      }
       session.step = 'ask_amount';
       await saveSession(session);
-      return `How much would you like to borrow? (Between R${process.env.MIN_LOAN_AMOUNT || 500} and R${process.env.MAX_LOAN_AMOUNT || 15000})`;
+      return `How much would you like to borrow? (Between R${process.env.MIN_LOAN_AMOUNT || 500} and R${process.env.MAX_LOAN_AMOUNT || 50000})`;
     }
 
     case 'ask_amount': {
@@ -143,17 +238,24 @@ async function advanceConversation(session, text) {
       session.data.requestedAmount = amount;
       session.step = 'ask_term';
       await saveSession(session);
-      return 'Over how many months would you like to repay? (1-36)';
+      return `Over how many months would you like to repay? (1-${process.env.MAX_TERM_MONTHS || 60})`;
     }
 
     case 'ask_term': {
       const term = Number(text.replace(/[^\d.]/g, ''));
-      if (!term || term < 1 || term > 36) return 'Please reply with a number of months between 1 and 36.';
+      const maxTerm = Number(process.env.MAX_TERM_MONTHS || 60);
+      if (!term || term < 1 || term > maxTerm) return `Please reply with a number of months between 1 and ${maxTerm}.`;
       session.data.termMonths = term;
+      session.step = 'ask_purpose';
+      await saveSession(session);
+      return "What's the loan for? (e.g. emergency, school fees, medical, home repairs)";
+    }
+
+    case 'ask_purpose':
+      session.data.loanPurpose = text;
       session.step = 'ask_bank_holder';
       await saveSession(session);
       return "Almost done — I need your payout bank details. This account must be in your own name.\n\nWhat's the account holder's full name?";
-    }
 
     case 'ask_bank_holder':
       session.data.bankAccountHolder = text;
@@ -194,127 +296,43 @@ async function advanceConversation(session, text) {
 async function finalizeApplication(session) {
   const d = session.data;
 
-  const previousLoans = await db.filter('applications', (a) => a.idNumber === d.idNumber && a.decision === 'approved');
-  const thisCalendarYear = new Date().getFullYear();
-  const previousLoansThisYear = previousLoans.filter((a) => new Date(a.createdAt).getFullYear() === thisCalendarYear);
-  const isFirstLoan = previousLoansThisYear.length === 0;
-  const missedPayments = previousLoans.filter((a) => a.repaymentStatus === 'missed').length;
+  const result = await createApplication(
+    {
+      fullName: d.fullName,
+      idNumber: d.idNumber,
+      phoneNumber: session.phone,
+      maritalStatus: d.maritalStatus,
+      residentialStatus: d.residentialStatus,
+      underDebtReview: d.underDebtReview,
+      popiaConsent: d.popiaConsent,
+      creditBureauConsent: d.creditBureauConsent,
+      declarationsAccepted: d.declarationsAccepted,
+      employmentType: d.employmentType,
+      employerName: d.employerName,
+      employerPhone: d.employerPhone,
+      monthsEmployed: d.monthsEmployed,
+      salaryPaymentDate: d.salaryPaymentDate,
+      netMonthlyIncome: d.netMonthlyIncome,
+      averageCommission3mo: d.averageCommission3mo,
+      averageOvertime3mo: d.averageOvertime3mo,
+      monthlyExpenses: d.monthlyExpenses,
+      existingDebts: d.existingDebts,
+      requestedAmount: d.requestedAmount,
+      termMonths: d.termMonths,
+      loanPurpose: d.loanPurpose,
+      bankAccountHolder: d.bankAccountHolder,
+      bankName: d.bankName,
+      accountNumber: d.accountNumber,
+      branchCode: d.branchCode,
+    },
+    { channel: 'whatsapp', baseUrl: process.env.PUBLIC_APP_URL || 'https://your-domain.example' }
+  );
 
-  const affordability = assessAffordability({
-    netMonthlyIncome: d.netMonthlyIncome,
-    monthlyExpenses: d.monthlyExpenses,
-    existingDebtInstalments: 0,
-    requestedAmount: d.requestedAmount,
-    termMonths: d.termMonths,
-    isFirstLoan,
-  });
-
-  if (affordability.errors.length) {
-    return `Sorry, ${affordability.errors.join(' ')} Message START to try again.`;
+  if (!result.ok) {
+    return `Sorry, ${result.error} Message START to try again.`;
   }
 
-  const risk = scoreApplication({
-    employmentType: d.employmentType,
-    monthsEmployed: 12,
-    netMonthlyIncome: d.netMonthlyIncome,
-    existingDebtInstalments: 0,
-    requestedAmount: d.requestedAmount,
-    previousLoansWithKhula: previousLoans.length,
-    missedPaymentsWithKhula: missedPayments,
-  });
-
-  const outcome = decide({ affordability, risk });
-  const reference = `KHULA-${Date.now().toString(36).toUpperCase()}`;
-
-  const namesMatch = namesLooselyMatch(d.fullName, d.bankAccountHolder);
-
-  await db.insert('applications', {
-    id: reference,
-    reference,
-    createdAt: new Date().toISOString(),
-    channel: 'whatsapp',
-    status: outcome.decision === 'approved' ? 'pending_kyc' : outcome.decision,
-    decision: outcome.decision,
-    fullName: d.fullName,
-    idNumber: d.idNumber,
-    phoneNumber: session.phone,
-    phoneVerified: true, // messaging FROM this number is itself the proof of control
-    employmentType: d.employmentType,
-    netMonthlyIncome: d.netMonthlyIncome,
-    monthlyExpenses: d.monthlyExpenses,
-    existingDebtInstalments: 0,
-    requestedAmount: d.requestedAmount,
-    termMonths: d.termMonths,
-    popiaConsent: true,
-    popiaConsentAt: new Date().toISOString(),
-    bankAccountHolder: d.bankAccountHolder,
-    bankName: d.bankName,
-    accountNumber: d.accountNumber,
-    branchCode: d.branchCode,
-    payoutNameLooselyMatches: namesMatch,
-    affordability,
-    risk,
-    kyc: {
-      status: outcome.decision === 'approved' ? 'awaiting_documents' : 'not_applicable',
-      identityVerified: false,
-      addressVerified: false,
-      employmentVerified: false,
-      payoutAccountVerified: false,
-      documents: [],
-      reviewedBy: null,
-      reviewedAt: null,
-      auditLog: [],
-    },
-    underwriting: {
-      bureauChecked: false,
-      bureauCheckedBy: null,
-      bureauCheckedAt: null,
-      employmentConfirmed: null,
-      creditRecordClean: null,
-      judgmentsOrDefaultsFound: null,
-      notes: null,
-    },
-    collections: {
-      debicheckStatus: 'not_started',
-      mandateReference: null,
-      mandateSentAt: null,
-      mandateConfirmedAt: null,
-    },
-    signature: null,
-    reconsiderationDeadline: null,
-    adminNotes: [],
-  });
-
-  if (outcome.decision === 'approved') {
-    const base = process.env.PUBLIC_APP_URL || 'https://your-domain.example';
-    const q = affordability.quotation;
-    const ceilingNote = q.aboveShortTermCreditCeiling
-      ? `\n\n⚠️ Above R${q.shortTermCreditCeiling} — needs compliance confirmation on applicable fee/interest caps before this quote is final.`
-      : '';
-    return `You're pre-approved, ${d.fullName.split(' ')[0]}! 🎉\n\n` +
-      `Interest: ${(q.monthlyInterestRate * 100).toFixed(1)}%/month\n` +
-      `Initiation fee: R${q.initiationFee.toFixed(2)}\n` +
-      `Monthly service fee: R${q.monthlyServiceFee.toFixed(2)}\n` +
-      `Insurance: from R${q.schedule[0].insurancePremium.toFixed(2)}/month\n` +
-      `First instalment: R${q.firstMonthInstalment.toFixed(2)}\n` +
-      `Total repayable: R${q.totalRepayable.toFixed(2)}\n\n` +
-      `Reference: ${reference}${ceilingNote}\n\nBefore we can pay out we need 4 documents: ID copy, proof of address, proof of income, and proof of your bank account. Upload them here: ${base}/upload.html?ref=${reference}\n\nOur team reviews within 1 business day — message us here anytime to check your status.`;
-  }
-  if (outcome.decision === 'manual_review') {
-    return `Thanks ${d.fullName.split(' ')[0]}. Reference ${reference} needs a quick human review — we'll message you here within 1 business day.`;
-  }
-  return affordability.suggestedAmount
-    ? `R${d.requestedAmount} isn't affordable right now, but R${affordability.suggestedAmount} over ${d.termMonths} months looks manageable. Reply with that amount to re-apply, or START to begin again.`
-    : `We can't offer a loan right now. Reference ${reference}. Message START to try again in future.`;
-}
-
-function namesLooselyMatch(a, b) {
-  const normalize = (s) => String(s || '').toLowerCase().replace(/[^a-z\s]/g, '').split(/\s+/).filter(Boolean).sort();
-  const partsA = normalize(a);
-  const partsB = normalize(b);
-  if (!partsA.length || !partsB.length) return null;
-  const overlap = partsA.filter((p) => partsB.includes(p));
-  return overlap.length > 0;
+  return result.response.message + '\n\nMessage us here anytime to check your status.';
 }
 
 module.exports = router;
