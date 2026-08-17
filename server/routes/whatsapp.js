@@ -2,6 +2,7 @@ const express = require('express');
 const db = require('../lib/db');
 const { sendWhatsAppMessage } = require('../lib/whatsappSender');
 const { createApplication } = require('../lib/applicationEngine');
+const { matchBankName } = require('../lib/bankCodes');
 
 const router = express.Router();
 
@@ -263,16 +264,33 @@ async function advanceConversation(session, text) {
       await saveSession(session);
       return 'Which bank?';
 
-    case 'ask_bank_name':
+    case 'ask_bank_name': {
       session.data.bankName = text;
+      const matched = matchBankName(text);
       session.step = 'ask_account_number';
+      if (matched && matched.branchCode) {
+        // Recognised bank — branch code is universal, so there's no need
+        // to ask for it at all.
+        session.data.branchCode = matched.branchCode;
+        session.data.bankName = matched.name; // use the canonical name, not whatever variant they typed
+        session.data.branchCodeAutoFilled = true;
+        await saveSession(session);
+        return `Got it — ${matched.name} (branch code ${matched.branchCode} filled in automatically). Account number?`;
+      }
       await saveSession(session);
       return 'Account number?';
+    }
 
     case 'ask_account_number': {
       const acc = text.replace(/\s/g, '');
       if (!/^\d{6,17}$/.test(acc)) return "That doesn't look like a valid account number. Please try again.";
       session.data.accountNumber = acc;
+      if (session.data.branchCodeAutoFilled) {
+        // Already have the branch code — skip straight to finishing up.
+        session.step = 'done';
+        await saveSession(session);
+        return await finalizeApplication(session);
+      }
       session.step = 'ask_branch_code';
       await saveSession(session);
       return 'Branch code? (reply "skip" if you don\'t have it handy)';

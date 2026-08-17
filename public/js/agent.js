@@ -22,6 +22,33 @@
     })
     .catch(() => {});
 
+  // Populate the bank dropdown and wire up branch-code auto-fill.
+  let banksList = [];
+  fetch('/api/banks')
+    .then((r) => r.json())
+    .then((banks) => {
+      banksList = banks;
+      const select = document.getElementById('f_bankName');
+      select.innerHTML = '<option value="">Select bank…</option>' + banks.map((b) => `<option value="${b.name}">${b.name}</option>`).join('');
+      select.addEventListener('change', () => {
+        const bank = banksList.find((b) => b.name === select.value);
+        const branchInput = document.getElementById('f_branchCode');
+        const autoLabel = document.getElementById('branchCodeAutoLabel');
+        if (bank && bank.branchCode) {
+          branchInput.value = bank.branchCode;
+          branchInput.disabled = true;
+          autoLabel.textContent = '(filled in automatically)';
+        } else {
+          branchInput.value = '';
+          branchInput.disabled = false;
+          autoLabel.textContent = bank ? '(please enter manually)' : '';
+        }
+      });
+    })
+    .catch(() => {
+      document.getElementById('f_bankName').outerHTML = '<input id="f_bankName" type="text" placeholder="Bank name" />';
+    });
+
   const FORM_FIELDS = [
     'f_fullName', 'f_idNumber', 'f_phoneNumber', 'f_employmentType', 'f_employerName', 'f_employerPhone',
     'f_monthsEmployed', 'f_salaryPaymentDate', 'f_netMonthlyIncome', 'f_averageCommission3mo', 'f_monthlyExpenses',
@@ -96,6 +123,8 @@
     document.getElementById('f_residentialStatus').value = 'renting';
     document.getElementById('f_otpCode').value = '';
     document.getElementById('f_phoneNumber').disabled = false;
+    document.getElementById('f_branchCode').disabled = false;
+    document.getElementById('branchCodeAutoLabel').textContent = '';
     document.getElementById('otpVerifiedBadge').style.display = 'none';
     document.getElementById('otpRequestField').style.display = 'block';
     document.getElementById('otpVerifyField').style.display = 'none';

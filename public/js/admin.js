@@ -80,7 +80,11 @@
           ` : ''}
           ${a.status === 'pending_kyc' ? `<button class="review-kyc" data-ref="${a.reference}">Review KYC</button>` : ''}
           ${a.status === 'active' && a.collections?.debicheckStatus === 'not_started' ? `<button class="review-kyc" data-ref="${a.reference}" data-debicheck="1">Start DebiCheck</button>` : ''}
-          ${a.status === 'active' && a.collections?.debicheckStatus && a.collections.debicheckStatus !== 'not_started' ? `<span style="font-size:11.5px;color:var(--ink-soft);">DebiCheck: ${a.collections.debicheckStatus.replace(/_/g, ' ')}</span>` : ''}
+          ${a.status === 'active' && a.collections?.debicheckStatus === 'mandate_sent' ? `
+            <button class="row-actions-mandate-confirm" data-ref="${a.reference}" style="border:1px solid var(--forest);color:var(--forest);background:var(--white);border-radius:8px;padding:4px 8px;font-size:11px;cursor:pointer;">Confirm mandate</button>
+            <button class="row-actions-mandate-decline" data-ref="${a.reference}" style="border:1px solid var(--danger);color:var(--danger);background:var(--white);border-radius:8px;padding:4px 8px;font-size:11px;cursor:pointer;">Decline</button>
+          ` : ''}
+          ${a.status === 'active' && a.collections?.debicheckStatus && !['not_started', 'mandate_sent'].includes(a.collections.debicheckStatus) ? `<span style="font-size:11.5px;color:var(--ink-soft);">DebiCheck: ${a.collections.debicheckStatus.replace(/_/g, ' ')}${a.disbursement?.status === 'disbursed' ? ' · Disbursed' : ''}</span>` : ''}
           ${['active', 'completed'].includes(a.status) && a.collections?.repaymentSchedule?.length ? `<button class="review-kyc" data-ref="${a.reference}" data-repayments="1">Repayments</button>` : ''}
           ${a.status === 'active' && (a.collections?.repaymentSchedule || []).some(i => i.status === 'overdue') ? `<button class="review-kyc" data-ref="${a.reference}" data-legal="1" style="border-color:var(--danger);color:var(--danger);">Legal</button>` : ''}
           ${!['manual_review'].includes(a.decision) && a.status !== 'pending_kyc' && !(a.status === 'active') ? '—' : ''}
@@ -109,6 +113,23 @@
         const res = await authedFetch(`/api/admin/applications/${btn.dataset.ref}/debicheck`, { method: 'POST' });
         const data = await res.json();
         if (data.debicheckNote) alert(data.debicheckNote);
+        await refresh();
+      });
+    });
+
+    document.querySelectorAll('.row-actions-mandate-confirm').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Confirm this mandate was accepted by the borrower\'s bank? This releases disbursement and notifies the customer.')) return;
+        await authedFetch(`/api/admin/applications/${btn.dataset.ref}/mandate/confirm`, { method: 'POST' });
+        await refresh();
+      });
+    });
+
+    document.querySelectorAll('.row-actions-mandate-decline').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const note = prompt('Optional note (why the mandate wasn\'t confirmed):') || '';
+        if (!confirm('Mark this mandate as declined? Funds will NOT be disbursed, and the customer will be notified.')) return;
+        await authedFetch(`/api/admin/applications/${btn.dataset.ref}/mandate/decline`, { method: 'POST', body: JSON.stringify({ note }) });
         await refresh();
       });
     });

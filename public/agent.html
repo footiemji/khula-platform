@@ -113,9 +113,11 @@
 
     <h3 class="display" style="margin-bottom:8px;">Payout bank account (must be customer's own)</h3>
     <div class="field"><label>Account holder full name</label><input id="f_bankAccountHolder" type="text" /></div>
-    <div class="field"><label>Bank</label><input id="f_bankName" type="text" /></div>
+    <div class="field"><label>Bank</label>
+      <select id="f_bankName"><option value="">Loading banks…</option></select>
+    </div>
     <div class="field"><label>Account number</label><input id="f_accountNumber" type="text" /></div>
-    <div class="field"><label>Branch code (optional)</label><input id="f_branchCode" type="text" /></div>
+    <div class="field" id="branchCodeField"><label>Branch code <span id="branchCodeAutoLabel" style="font-weight:400; color:var(--ink-soft);"></span></label><input id="f_branchCode" type="text" /></div>
 
     <div class="field" style="background: rgba(200,155,42,0.12); padding: 12px; border-radius: 10px;">
       <label><input type="checkbox" id="f_customerPresent" /> I confirm the customer is physically present with me right now and has personally consented to this application</label>

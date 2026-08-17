@@ -275,10 +275,15 @@ async function createApplication(input, options = {}) {
       incomeVerificationNote: null,
     },
     collections: {
-      debicheckStatus: 'not_started',
+      debicheckStatus: 'not_started', // not_started | mandate_sent | mandate_confirmed | mandate_declined
       mandateReference: null,
       mandateSentAt: null,
       mandateConfirmedAt: null,
+    },
+    disbursement: {
+      status: 'not_applicable', // not_applicable (pre-signature) | pending_mandate | disbursed
+      disbursedAt: null,
+      confirmedBy: null,
     },
     legal: {
       section129NoticeSent: false,

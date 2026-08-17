@@ -5,7 +5,7 @@ const db = require('../lib/db');
 const { signToken, requireAdmin, checkPassword } = require('../lib/auth');
 const { readDocument } = require('../lib/documentStore');
 const { initiateMandate } = require('../lib/debicheck');
-const { sendThankYou } = require('../lib/reminders');
+const { sendThankYou, sendDisbursementConfirmation, sendMandateDeclinedNotice } = require('../lib/reminders');
 const { runCollectionsSweep } = require('../lib/collectionsSweep');
 const { parseSalaryDayOfMonth } = require('../lib/repaymentSchedule');
 const asyncHandler = require('../lib/asyncHandler');
@@ -248,6 +248,54 @@ router.post('/applications/:reference/debicheck', requireAdmin, asyncHandler(asy
   }));
 
   res.json({ ...updated, debicheckNote: result.note || null });
+}));
+
+// POST /api/admin/applications/:reference/mandate/confirm
+// This is the real gate on disbursement: the loan is legally signed the
+// moment the borrower types their name, but funds should only move once
+// the DebiCheck mandate is actually confirmed by the borrower's own bank.
+// Until a real provider webhook exists (see server/lib/debicheck.js), an
+// admin confirms this manually — same "human gate until real integration
+// exists" pattern used for the credit bureau check and KYC review.
+router.post('/applications/:reference/mandate/confirm', requireAdmin, asyncHandler(async (req, res) => {
+  const app = await db.find('applications', (a) => a.reference === req.params.reference);
+  if (!app) return res.status(404).json({ error: 'Application not found.' });
+  if (app.collections?.debicheckStatus !== 'mandate_sent') {
+    return res.status(400).json({ error: `No pending mandate to confirm (current status: ${app.collections?.debicheckStatus || 'not_started'}).` });
+  }
+
+  const confirmedAt = new Date().toISOString();
+  const updated = await db.update('applications', (a) => a.reference === req.params.reference, (a) => ({
+    ...a,
+    collections: { ...a.collections, debicheckStatus: 'mandate_confirmed', mandateConfirmedAt: confirmedAt },
+    disbursement: { status: 'disbursed', disbursedAt: confirmedAt, confirmedBy: req.admin.email },
+    adminNotes: [...(a.adminNotes || []), { note: 'DebiCheck mandate confirmed by borrower\'s bank — funds disbursed.', at: confirmedAt, by: req.admin.email }],
+  }));
+
+  sendDisbursementConfirmation(updated).catch((e) => console.error('Failed to send disbursement confirmation:', e.message));
+
+  res.json(updated);
+}));
+
+// POST /api/admin/applications/:reference/mandate/decline
+router.post('/applications/:reference/mandate/decline', requireAdmin, asyncHandler(async (req, res) => {
+  const { note } = req.body || {};
+  const app = await db.find('applications', (a) => a.reference === req.params.reference);
+  if (!app) return res.status(404).json({ error: 'Application not found.' });
+  if (app.collections?.debicheckStatus !== 'mandate_sent') {
+    return res.status(400).json({ error: `No pending mandate to decline (current status: ${app.collections?.debicheckStatus || 'not_started'}).` });
+  }
+
+  const declinedAt = new Date().toISOString();
+  const updated = await db.update('applications', (a) => a.reference === req.params.reference, (a) => ({
+    ...a,
+    collections: { ...a.collections, debicheckStatus: 'mandate_declined' },
+    adminNotes: [...(a.adminNotes || []), { note: note || 'DebiCheck mandate declined/not confirmed by borrower\'s bank.', at: declinedAt, by: req.admin.email }],
+  }));
+
+  sendMandateDeclinedNotice(updated).catch((e) => console.error('Failed to send mandate declined notice:', e.message));
+
+  res.json(updated);
 }));
 
 // ---------------- Agent management ----------------

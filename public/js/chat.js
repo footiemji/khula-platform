@@ -6,6 +6,7 @@
 
   const state = { step: 'welcome', data: {} };
   let cachedConfig = null;
+  let cachedBanks = null;
 
   async function getConfig() {
     if (cachedConfig) return cachedConfig;
@@ -16,6 +17,26 @@
       cachedConfig = { whatsappBusinessNumber: null };
     }
     return cachedConfig;
+  }
+
+  async function getBanks() {
+    if (cachedBanks) return cachedBanks;
+    try {
+      const res = await fetch('/api/banks');
+      cachedBanks = await res.json();
+    } catch {
+      cachedBanks = [];
+    }
+    return cachedBanks;
+  }
+
+  async function botSayBankDropdown() {
+    const banks = await getBanks();
+    if (!banks.length) {
+      await botSay('Which bank?');
+      return;
+    }
+    await botSay('Which bank?', banks.map((b) => ({ label: b.name, value: b.name })));
   }
 
   function addBubble(text, who = 'bot') {
@@ -381,21 +402,36 @@
       case 'ask_bank_holder':
         state.data.bankAccountHolder = text;
         state.step = 'ask_bank_name';
-        await botSay('Which bank?');
+        await botSayBankDropdown();
         break;
 
-      case 'ask_bank_name':
-        state.data.bankName = text;
-        state.step = 'ask_account_number';
-        await botSay('Account number?');
+      case 'ask_bank_name': {
+        const banks = await getBanks();
+        const matched = banks.find((b) => b.name === text);
+        state.data.bankName = matched ? matched.name : text;
+        if (matched && matched.branchCode) {
+          state.data.branchCode = matched.branchCode;
+          state.step = 'ask_account_number';
+          await botSay(`${matched.name} — branch code ${matched.branchCode} filled in automatically. Account number?`);
+        } else {
+          state.step = 'ask_account_number';
+          await botSay('Account number?');
+        }
         break;
+      }
 
       case 'ask_account_number': {
         const acc = text.replace(/\s/g, '');
         if (!/^\d{6,17}$/.test(acc)) { await botSay("That doesn't look like a valid account number. Please try again."); return; }
         state.data.accountNumber = acc;
-        state.step = 'ask_branch_code';
-        await botSay('Branch code? (or reply "skip" if you don\'t have it handy)');
+        if (state.data.branchCode) {
+          // Already auto-filled — skip straight to submitting.
+          state.step = 'submitting';
+          await submitApplication();
+        } else {
+          state.step = 'ask_branch_code';
+          await botSay('Branch code? (or reply "skip" if you don\'t have it handy)');
+        }
         break;
       }
 

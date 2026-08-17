@@ -80,6 +80,11 @@ app.get('/api/config', (req, res) => res.json({
   whatsappBusinessNumber: process.env.WHATSAPP_BUSINESS_NUMBER || null,
 }));
 
+// South African bank list + branch codes, for the payout bank dropdown —
+// single source of truth shared with the WhatsApp channel's fuzzy matcher.
+const { SA_BANKS } = require('./lib/bankCodes');
+app.get('/api/banks', (req, res) => res.json(SA_BANKS));
+
 // Serve the borrower chat widget + admin dashboard
 app.use(express.static(path.join(__dirname, '..', 'public')));
 

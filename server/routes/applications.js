@@ -89,6 +89,10 @@ router.post('/:reference/sign', asyncHandler(async (req, res) => {
         ip: req.ip,
       },
       reconsiderationDeadline: reconsiderationDeadline.toISOString(),
+      disbursement: {
+        ...a.disbursement,
+        status: 'pending_mandate',
+      },
       collections: {
         ...a.collections,
         repaymentSchedule,
@@ -100,7 +104,7 @@ router.post('/:reference/sign', asyncHandler(async (req, res) => {
     reference: updated.reference,
     status: updated.status,
     reconsiderationDeadline: updated.reconsiderationDeadline,
-    message: `Signed and active! R${updated.requestedAmount} is on its way. Reference ${updated.reference}. You can cancel at no cost until ${reconsiderationDeadline.toLocaleDateString('en-ZA')} — just message us.`,
+    message: `Signed! Reference ${updated.reference}. Last step: we'll send a debit order mandate request to your bank — confirm it there (app, USSD, or however your bank does it), and your funds are released as soon as that's confirmed. You can cancel at no cost until ${reconsiderationDeadline.toLocaleDateString('en-ZA')} — just message us.`,
   });
 }));
 

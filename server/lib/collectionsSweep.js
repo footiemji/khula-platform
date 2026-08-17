@@ -13,15 +13,17 @@
 // duplicate reminders.
 
 const db = require('./db');
-const { sendUpcomingReminder, sendOverdueNotice } = require('./reminders');
+const { sendUpcomingReminder, sendOverdueNotice, sendRepeatOverdueReminder } = require('./reminders');
 
 const REMINDER_DAYS_BEFORE = Number(process.env.REMINDER_DAYS_BEFORE || 3);
+const OVERDUE_REMINDER_INTERVAL_DAYS = Number(process.env.OVERDUE_REMINDER_INTERVAL_DAYS || 7);
+const MAX_OVERDUE_REMINDERS = Number(process.env.MAX_OVERDUE_REMINDERS || 4);
 
 async function runCollectionsSweep() {
   const applications = await db.readAll('applications');
   const activeLoans = applications.filter((a) => a.status === 'active' && a.collections?.repaymentSchedule?.length);
 
-  const results = { remindersSent: 0, overdueNoticesSent: 0, errors: [] };
+  const results = { remindersSent: 0, overdueNoticesSent: 0, repeatOverdueRemindersSent: 0, errors: [] };
   const now = new Date();
 
   for (const app of activeLoans) {
@@ -44,7 +46,25 @@ async function runCollectionsSweep() {
           sendOverdueNotice(app, installment).catch((e) => results.errors.push(e.message));
           results.overdueNoticesSent += 1;
           scheduleChanged = true;
-          return { ...installment, status: 'overdue' };
+          return { ...installment, status: 'overdue', overdueNoticeAt: now.toISOString(), overdueReminderCount: 0, lastOverdueReminderAt: now.toISOString() };
+        }
+
+        // Already overdue — send a periodic, gentle re-reminder, capped so
+        // this doesn't turn into an indefinite automated loop. Beyond the
+        // cap, further contact should come through the human-driven legal
+        // escalation ladder (see server/routes/admin.js legal/* endpoints),
+        // not more automated messages.
+        if (installment.status === 'overdue') {
+          const reminderCount = installment.overdueReminderCount || 0;
+          const lastReminder = new Date(installment.lastOverdueReminderAt || installment.overdueNoticeAt || dueDate);
+          const daysSinceLastReminder = (now - lastReminder) / (1000 * 60 * 60 * 24);
+
+          if (reminderCount < MAX_OVERDUE_REMINDERS && daysSinceLastReminder >= OVERDUE_REMINDER_INTERVAL_DAYS) {
+            sendRepeatOverdueReminder(app, installment).catch((e) => results.errors.push(e.message));
+            results.repeatOverdueRemindersSent += 1;
+            scheduleChanged = true;
+            return { ...installment, overdueReminderCount: reminderCount + 1, lastOverdueReminderAt: now.toISOString() };
+          }
         }
       } catch (err) {
         results.errors.push(err.message);
@@ -64,4 +84,4 @@ async function runCollectionsSweep() {
   return results;
 }
 
-module.exports = { runCollectionsSweep, REMINDER_DAYS_BEFORE };
+module.exports = { runCollectionsSweep, REMINDER_DAYS_BEFORE, OVERDUE_REMINDER_INTERVAL_DAYS, MAX_OVERDUE_REMINDERS };
