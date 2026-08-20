@@ -53,8 +53,30 @@ router.post('/webhook', async (req, res) => {
 
   const entry = req.body?.entry?.[0];
   const change = entry?.changes?.[0]?.value;
+
+  // Delivery status updates — sent/delivered/read/failed — arrive on this
+  // SAME webhook, as a `statuses` array rather than `messages`. This is
+  // the only place a real delivery failure reason actually shows up: the
+  // send API call can return a message ID successfully (meaning Meta
+  // accepted the request) while the message still never reaches the
+  // phone — e.g. because the 24-hour customer-service window closed, or
+  // the recipient isn't reachable on WhatsApp. Logging these is what
+  // turns "message not received, no idea why" into an actual diagnosis
+  // instead of a guess.
+  const statuses = change?.statuses;
+  if (statuses && statuses.length) {
+    statuses.forEach((s) => {
+      if (s.status === 'failed') {
+        const errorDetail = (s.errors || []).map((e) => `${e.code}: ${e.title}${e.message ? ' — ' + e.message : ''}`).join('; ');
+        console.error(`[WhatsApp DELIVERY FAILED -> ${s.recipient_id}] message ${s.id}: ${errorDetail || 'no error detail provided'}`);
+      } else {
+        console.log(`[WhatsApp STATUS -> ${s.recipient_id}] message ${s.id}: ${s.status}`);
+      }
+    });
+  }
+
   const message = change?.messages?.[0];
-  if (!message) return; // status callbacks, etc — nothing to do
+  if (!message) return; // no inbound message on this webhook call (e.g. it was a status update, handled above)
 
   const from = message.from; // WhatsApp user's phone number (E.164, no +)
   const text = (message.text?.body || '').trim();

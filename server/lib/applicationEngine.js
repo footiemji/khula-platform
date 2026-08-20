@@ -5,15 +5,26 @@
 // engine, three front doors.
 
 const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 const db = require('./db');
 const { assessAffordability } = require('./affordability');
 const { scoreApplication, decide } = require('./riskScore');
 const { checkVerificationToken } = require('./otp');
 const { checkHardGates } = require('./hardGates');
 
+// Reference numbers are shared in plain URLs (upload links, PDF downloads,
+// sign links) with no separate authentication — the reference itself IS
+// the access secret, the same pattern many services use for shareable
+// links. That means it needs real entropy, not just a timestamp: a
+// timestamp alone is guessable/enumerable by anyone with a rough idea of
+// when an application was submitted, which is a genuine information
+// disclosure risk (name, phone, income, employment are all visible via
+// the status endpoint to anyone holding a valid reference). The random
+// suffix below is what actually makes this safe to use as a bearer token.
 function generateReference() {
   const stamp = Date.now().toString(36).toUpperCase();
-  return `KHULA-${stamp}`;
+  const random = crypto.randomBytes(4).toString('hex').toUpperCase();
+  return `KHULA-${stamp}${random}`;
 }
 
 // Loose check: does the payout account holder's name look like it's the

@@ -458,7 +458,7 @@
         break;
 
       default:
-        await botSay("That's the end of this demo conversation. Refresh to start a new application.");
+        await botSay("This application has been completed. Refresh this page to start a new one.");
     }
   }
 
