@@ -13,7 +13,7 @@
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const db = require('./db');
-const { sendWhatsAppMessage } = require('./whatsappSender');
+const { sendWhatsAppMessage, sendWhatsAppTemplate } = require('./whatsappSender');
 const { toWhatsAppFormat } = require('./phoneFormat');
 
 const OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
@@ -74,7 +74,20 @@ async function requestOtp(phoneNumber) {
   await db.insert('otp_verifications', record);
 
   const waMessagingPhone = phone; // already in WhatsApp-ready format via normalizePhone/toWhatsAppFormat
-  const delivered = await sendWhatsAppMessage(waMessagingPhone, `Your Khula Financial Services verification code is ${code}. It expires in 5 minutes. Don't share this code with anyone.`);
+
+  // Once WHATSAPP_OTP_TEMPLATE_NAME is set (i.e. your Authentication
+  // template is approved), OTPs send via the template — reliable
+  // regardless of whether the customer has an open 24-hour service
+  // window. Until then, this falls back to the plain-text message, which
+  // ONLY delivers within that window — see docs/DEPLOY.md or README §4.
+  const delivered = process.env.WHATSAPP_OTP_TEMPLATE_NAME
+    ? await sendWhatsAppTemplate(
+        waMessagingPhone,
+        process.env.WHATSAPP_OTP_TEMPLATE_NAME,
+        process.env.WHATSAPP_OTP_TEMPLATE_LANG || 'en_US',
+        [code]
+      )
+    : await sendWhatsAppMessage(waMessagingPhone, `Your Khula Financial Services verification code is ${code}. It expires in 5 minutes. Don't share this code with anyone.`);
 
   if (!delivered) {
     // Don't leave a dead record counting against the rate limit for a code
