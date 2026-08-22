@@ -12,6 +12,24 @@ const { scoreApplication, decide } = require('./riskScore');
 const { checkVerificationToken } = require('./otp');
 const { checkHardGates } = require('./hardGates');
 
+// PUBLIC_APP_URL needs a proper http(s):// scheme to build links that
+// WhatsApp will actually render as tappable — a bare domain like
+// "khulafs.co.za" (missing the scheme) gets sent as plain, unclickable
+// text, which is exactly the kind of silent misconfiguration that's easy
+// to miss until a real customer can't tap their document-upload link.
+// This normalizes it defensively rather than trusting the env var is
+// always set correctly.
+function normalizeUrl(raw) {
+  const trimmed = (raw || '').trim();
+  if (!trimmed) return 'https://your-domain.example';
+  if (/^https?:\/\//i.test(trimmed)) return trimmed.replace(/\/$/, '');
+  return `https://${trimmed.replace(/\/$/, '')}`;
+}
+
+function getPublicAppUrl() {
+  return normalizeUrl(process.env.PUBLIC_APP_URL);
+}
+
 // Reference numbers are shared in plain URLs (upload links, PDF downloads,
 // sign links) with no separate authentication — the reference itself IS
 // the access secret, the same pattern many services use for shareable
@@ -40,7 +58,7 @@ function namesLooselyMatch(a, b) {
 }
 
 function messageForDecision(decisionType, record, baseUrl) {
-  const base = baseUrl || '';
+  const base = baseUrl ? normalizeUrl(baseUrl) : getPublicAppUrl();
   switch (decisionType) {
     case 'approved': {
       const q = record.affordability.quotation;
@@ -330,4 +348,57 @@ async function createApplication(input, options = {}) {
   };
 }
 
-module.exports = { createApplication, generateReference, namesLooselyMatch, messageForDecision };
+const { buildRepaymentSchedule } = require('./repaymentSchedule');
+
+const RECONSIDERATION_DAYS = Number(process.env.RECONSIDERATION_DAYS || 5);
+
+function addBusinessDays(date, days) {
+  const result = new Date(date);
+  let added = 0;
+  while (added < days) {
+    result.setDate(result.getDate() + 1);
+    const day = result.getDay();
+    if (day !== 0 && day !== 6) added += 1;
+  }
+  return result;
+}
+
+/**
+ * Signs a loan agreement — shared between the HTTP route (applications.js)
+ * and the WhatsApp status-check flow, so a customer can sign from either
+ * channel through the exact same logic. Returns { ok: true, application }
+ * or { ok: false, status, error }.
+ */
+async function signApplication(reference, typedFullName, ipAddress) {
+  if (!typedFullName) return { ok: false, status: 400, error: 'Typed full name is required to sign.' };
+
+  const app = await db.find('applications', (a) => a.reference === reference);
+  if (!app) return { ok: false, status: 404, error: 'Application not found.' };
+  if (app.status !== 'awaiting_signature') {
+    return { ok: false, status: 400, error: `Application is not awaiting signature (status: ${app.status}).` };
+  }
+  if (typedFullName.trim().toLowerCase() !== app.fullName.trim().toLowerCase()) {
+    return { ok: false, status: 400, error: 'Typed name must match the name on the application.' };
+  }
+
+  const signedAt = new Date();
+  const reconsiderationDeadline = addBusinessDays(signedAt, RECONSIDERATION_DAYS);
+  const repaymentSchedule = buildRepaymentSchedule(signedAt, app.affordability?.quotation?.schedule || [], app.salaryPaymentDate);
+
+  const updated = await db.update(
+    'applications',
+    (a) => a.reference === reference,
+    (a) => ({
+      ...a,
+      status: 'active',
+      signature: { typedFullName, signedAt: signedAt.toISOString(), ip: ipAddress || null },
+      reconsiderationDeadline: reconsiderationDeadline.toISOString(),
+      disbursement: { ...a.disbursement, status: 'pending_mandate' },
+      collections: { ...a.collections, repaymentSchedule },
+    })
+  );
+
+  return { ok: true, application: updated, reconsiderationDeadline };
+}
+
+module.exports = { createApplication, generateReference, namesLooselyMatch, messageForDecision, signApplication, RECONSIDERATION_DAYS, getPublicAppUrl };

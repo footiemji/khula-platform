@@ -67,7 +67,7 @@
     const rows = apps.map((a) => `
       <tr>
         <td class="mono">${a.reference}</td>
-        <td>${a.fullName}<br><span style="color:var(--ink-soft);font-size:11.5px;">${a.phoneNumber}</span></td>
+        <td>${a.fullName}<br><a href="tel:${a.phoneNumber}" style="color:var(--forest);font-size:12.5px;font-weight:600;text-decoration:none;">📞 ${a.phoneNumber}</a></td>
         <td>${a.channel}${a.agent ? `<br><span style="font-size:10.5px;color:var(--ink-soft);">via ${a.agent.shopName}</span>` : ''}</td>
         <td>${fmtCurrency(a.requestedAmount)}</td>
         <td>${a.termMonths}mo</td>

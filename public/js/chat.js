@@ -142,11 +142,108 @@
 
   function firstName(full) { return (full || '').trim().split(' ')[0] || 'there'; }
 
+  const STORAGE_KEY = 'khula_in_progress_application';
+
+  function saveProgress() {
+    if (!state.reference) return;
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ reference: state.reference, savedAt: Date.now() }));
+    } catch {
+      // localStorage can throw in private browsing on some browsers — not
+      // fatal, it just means this session won't be resumable later.
+    }
+  }
+
+  function clearProgress() {
+    try { localStorage.removeItem(STORAGE_KEY); } catch {}
+  }
+
+  function loadSavedReference() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      // Don't resume something abandoned weeks ago — a stale saved
+      // reference pointing at a long-dead application isn't useful, and
+      // silently reappearing is more confusing than just starting fresh.
+      const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+      if (Date.now() - (parsed.savedAt || 0) > THIRTY_DAYS_MS) return null;
+      return parsed.reference || null;
+    } catch {
+      return null;
+    }
+  }
+
   async function start() {
+    const savedReference = loadSavedReference();
+    if (savedReference) {
+      const resumed = await tryResume(savedReference);
+      if (resumed) return;
+    }
     await botSay(
       "Welcome to Khula Financial Services 🌱 Grow. Thrive. Rise.\n\nI can get you a loan decision in under 2 minutes — the same way this would work on WhatsApp. What's your full name?"
     );
     state.step = 'ask_name';
+  }
+
+  // Fetches the REAL current status from the server rather than trusting
+  // anything cached locally — the application may well have moved on since
+  // this browser last saw it (KYC reviewed, or even signed via WhatsApp,
+  // as a customer can freely switch channels). Returns true if it
+  // successfully resumed into a live conversation state, false if it
+  // should fall through to starting a fresh application instead.
+  async function tryResume(reference) {
+    try {
+      const res = await fetch(`/api/applications/${reference}`);
+      if (!res.ok) { clearProgress(); return false; }
+      const app = await res.json();
+
+      state.reference = reference;
+      state.data.fullName = app.fullName;
+
+      await botSay(`Welcome back! Picking up your application ${reference}…`);
+
+      switch (app.status) {
+        case 'pending_kyc': {
+          const missing = app.kyc?.missingDocuments || [];
+          state.step = 'pending_kyc';
+          if (missing.length > 0) {
+            addLinkButton(`/upload.html?ref=${reference}`, '📄 Upload your documents');
+            await botSay(`Still needed: ${missing.join(', ').replace(/_/g, ' ')}.`, [{ label: 'Check status', value: 'status' }]);
+          } else {
+            await botSay("All your documents are in — our team is reviewing them, usually within 1 business day.", [{ label: 'Check status', value: 'status' }]);
+          }
+          return true;
+        }
+        case 'awaiting_signature':
+          state.step = 'awaiting_signature';
+          await botSay("You're cleared to sign! Reply 'sign' whenever you're ready.", [{ label: 'Sign now', value: 'sign' }]);
+          return true;
+        case 'active':
+          state.step = 'done';
+          await botSay("This loan is already signed and active. Nothing more to do here!");
+          return true;
+        case 'completed':
+          state.step = 'done';
+          await botSay("This loan is fully paid off. 🎉 Thanks for being a Khula customer.");
+          return true;
+        case 'declined':
+          clearProgress();
+          state.step = 'done';
+          await botSay("This application didn't move forward. If you'd like to try again, click \"Start over\" above.");
+          return true;
+        case 'manual_review':
+          state.step = 'done';
+          await botSay("Your application is still with our team for review — we'll be in touch within 1 business day.");
+          return true;
+        default:
+          clearProgress();
+          return false;
+      }
+    } catch {
+      clearProgress();
+      return false;
+    }
   }
 
   async function handleInput(raw) {
@@ -546,6 +643,7 @@
         return;
       }
       state.reference = data.reference;
+      saveProgress();
       await botSay(data.message);
       if (data.decision === 'approved') {
         state.step = 'pending_kyc';
@@ -581,10 +679,30 @@
   sendBtn.addEventListener('click', () => handleInput());
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') handleInput(); });
 
+  document.getElementById('checkStatusHeaderBtn').addEventListener('click', async () => {
+    const ref = prompt('Enter your application reference (e.g. KHULA-ABC123XYZ):');
+    if (!ref) return;
+    const trimmed = ref.trim().toUpperCase();
+    addSystem(`Looking up ${trimmed}…`);
+    try {
+      const res = await fetch(`/api/applications/${trimmed}`);
+      const app = await res.json();
+      if (!res.ok) { await botSay(`⚠️ ${app.error || 'Could not find that application.'}`); return; }
+      state.reference = app.reference;
+      state.data.fullName = app.fullName;
+      saveProgress();
+      const resumed = await tryResume(app.reference);
+      if (!resumed) await botSay(`Current status: ${app.status.replace(/_/g, ' ')}.`);
+    } catch {
+      await botSay('⚠️ Could not reach the Khula server.');
+    }
+  });
+
   document.getElementById('restartBtn').addEventListener('click', () => {
     if (state.step !== 'welcome' && state.step !== 'ask_name' && !confirm('Start a new application? This clears everything you\'ve entered so far.')) {
       return;
     }
+    clearProgress();
     location.reload();
   });
 

@@ -4,8 +4,7 @@ const db = require('../lib/db');
 const { streamPreAgreementPDF } = require('../lib/pdfAgreement');
 const { detectType } = require('../lib/fileType');
 const { saveDocument } = require('../lib/documentStore');
-const { createApplication } = require('../lib/applicationEngine');
-const { buildRepaymentSchedule } = require('../lib/repaymentSchedule');
+const { createApplication, signApplication, getPublicAppUrl } = require('../lib/applicationEngine');
 const asyncHandler = require('../lib/asyncHandler');
 
 const router = express.Router();
@@ -13,29 +12,18 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 *
 
 const REQUIRED_DOCUMENT_TYPES = ['id_document', 'proof_of_address', 'proof_of_income', 'proof_of_bank_account'];
 
-// Default reconsideration window (business days), configurable via .env.
-// This is a policy default, not a confirmed statutory requirement — see
-// docs/COMPLIANCE.md. Have your compliance officer confirm the applicable
-// right before relying on this in production.
+// Default reconsideration window (business days) — used in the pre-agreement
+// PDF disclosure. The actual signing logic (which also uses this) now lives
+// in server/lib/applicationEngine.js's signApplication(), shared with the
+// WhatsApp status-check flow.
 const RECONSIDERATION_DAYS = Number(process.env.RECONSIDERATION_DAYS || 5);
-
-function addBusinessDays(date, days) {
-  const result = new Date(date);
-  let added = 0;
-  while (added < days) {
-    result.setDate(result.getDate() + 1);
-    const day = result.getDay();
-    if (day !== 0 && day !== 6) added += 1;
-  }
-  return result;
-}
 
 // POST /api/applications
 // Creates a new loan application via the web widget. See
 // server/lib/applicationEngine.js for the shared validation/decision logic
 // used by this, the agent-assisted flow, and (in spirit) WhatsApp.
 router.post('/', asyncHandler(async (req, res) => {
-  const result = await createApplication(req.body, { channel: req.body?.channel || 'web', baseUrl: process.env.PUBLIC_APP_URL });
+  const result = await createApplication(req.body, { channel: req.body?.channel || 'web', baseUrl: getPublicAppUrl() });
   if (!result.ok) return res.status(result.status).json({ error: result.error });
   res.status(201).json(result.response);
 }));
@@ -62,49 +50,15 @@ router.get('/:reference', asyncHandler(async (req, res) => {
 // binding, audit-trailed signature (see docs/COMPLIANCE.md).
 router.post('/:reference/sign', asyncHandler(async (req, res) => {
   const { typedFullName } = req.body || {};
-  if (!typedFullName) return res.status(400).json({ error: 'Typed full name is required to sign.' });
+  const result = await signApplication(req.params.reference, typedFullName, req.ip);
+  if (!result.ok) return res.status(result.status).json({ error: result.error });
 
-  const app = await db.find('applications', (a) => a.reference === req.params.reference);
-  if (!app) return res.status(404).json({ error: 'Application not found.' });
-  if (app.status !== 'awaiting_signature') {
-    return res.status(400).json({ error: `Application is not awaiting signature (status: ${app.status}).` });
-  }
-  if (typedFullName.trim().toLowerCase() !== app.fullName.trim().toLowerCase()) {
-    return res.status(400).json({ error: 'Typed name must match the name on the application.' });
-  }
-
-  const signedAt = new Date();
-  const reconsiderationDeadline = addBusinessDays(signedAt, RECONSIDERATION_DAYS);
-  const repaymentSchedule = buildRepaymentSchedule(signedAt, app.affordability?.quotation?.schedule || [], app.salaryPaymentDate);
-
-  const updated = await db.update(
-    'applications',
-    (a) => a.reference === req.params.reference,
-    (a) => ({
-      ...a,
-      status: 'active',
-      signature: {
-        typedFullName,
-        signedAt: signedAt.toISOString(),
-        ip: req.ip,
-      },
-      reconsiderationDeadline: reconsiderationDeadline.toISOString(),
-      disbursement: {
-        ...a.disbursement,
-        status: 'pending_mandate',
-      },
-      collections: {
-        ...a.collections,
-        repaymentSchedule,
-      },
-    })
-  );
-
+  const updated = result.application;
   res.json({
     reference: updated.reference,
     status: updated.status,
     reconsiderationDeadline: updated.reconsiderationDeadline,
-    message: `Signed! Reference ${updated.reference}. Last step: we'll send a debit order mandate request to your bank — confirm it there (app, USSD, or however your bank does it), and your funds are released as soon as that's confirmed. You can cancel at no cost until ${reconsiderationDeadline.toLocaleDateString('en-ZA')} — just message us.`,
+    message: `Signed! Reference ${updated.reference}. Last step: we'll send a debit order mandate request to your bank — confirm it there (app, USSD, or however your bank does it), and your funds are released as soon as that's confirmed. You can cancel at no cost until ${result.reconsiderationDeadline.toLocaleDateString('en-ZA')} — just message us.`,
   });
 }));
 
@@ -139,7 +93,7 @@ router.post(
       const file = files[type][0];
       const detected = detectType(file.buffer);
       if (!detected) {
-        rejected.push({ type, reason: 'Unsupported or unrecognized file type. Only PDF, JPEG, and PNG are accepted.' });
+        rejected.push({ type, reason: 'Unsupported or unrecognized file type. Only PDF files are accepted.' });
         continue;
       }
       const { id, filename } = saveDocument(app.reference, file.buffer);

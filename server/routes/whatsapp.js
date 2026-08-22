@@ -1,7 +1,7 @@
 const express = require('express');
 const db = require('../lib/db');
 const { sendWhatsAppMessage } = require('../lib/whatsappSender');
-const { createApplication } = require('../lib/applicationEngine');
+const { createApplication, signApplication, getPublicAppUrl } = require('../lib/applicationEngine');
 const { matchBankName } = require('../lib/bankCodes');
 
 const router = express.Router();
@@ -325,11 +325,77 @@ async function advanceConversation(session, text) {
       return await finalizeApplication(session);
 
     case 'done':
-    default:
+    default: {
+      // Someone messaging after "done" almost always means they're
+      // checking in on an application they already submitted — not
+      // starting fresh. Blindly resetting here (the old behaviour) broke
+      // the platform's own promise to "message us anytime to check your
+      // status": there was no status check at all, just a silent restart.
+      const existing = await db.find('applications', (a) => a.phoneNumber?.replace(/\D/g, '').endsWith(session.phone.replace(/\D/g, '').slice(-9)));
+      if (existing && existing.status === 'awaiting_signature') {
+        session.step = 'awaiting_sign_name';
+        session.data.signingReference = existing.reference;
+        await saveSession(session);
+        return statusMessageFor(existing);
+      }
+      if (existing) {
+        session.step = 'welcome';
+        session.data = {};
+        await saveSession(session);
+        return statusMessageFor(existing);
+      }
+
       session.step = 'welcome';
       session.data = {};
       await saveSession(session);
       return "Let's start a new application. What's your full name?";
+    }
+
+    case 'awaiting_sign_name': {
+      if (!/^sign$/i.test(text.trim())) {
+        // They typed something other than "SIGN" — treat it as their
+        // typed-name signature directly, so "reply SIGN" isn't a hard
+        // requirement if they just type their name straight away.
+        const result = await signApplication(session.data.signingReference, text, null);
+        session.step = 'welcome';
+        session.data = {};
+        await saveSession(session);
+        if (!result.ok) return `${result.error} Message us here if you need help.`;
+        return `Signed! Reference ${result.application.reference}. We'll send a debit order mandate request to your bank next — confirm it there, and your funds are released once that's confirmed. You can cancel at no cost until ${result.reconsiderationDeadline.toLocaleDateString('en-ZA')}.`;
+      }
+      return "Please type your full name exactly as it appears on your application — that's your signature.";
+    }
+  }
+}
+
+// Builds a plain-language status update for an existing application —
+// used both here and could be reused anywhere else a "what's going on
+// with my loan" check happens.
+function statusMessageFor(app) {
+  const firstName = app.fullName.split(' ')[0];
+  switch (app.status) {
+    case 'pending_kyc': {
+      const uploaded = (app.kyc?.documents || []).map((d) => d.type);
+      const required = ['id_document', 'proof_of_address', 'proof_of_income', 'proof_of_bank_account'];
+      const missing = required.filter((t) => !uploaded.includes(t));
+      const base = getPublicAppUrl();
+      if (missing.length > 0) {
+        return `Hi ${firstName}, your application ${app.reference} is still waiting on documents: ${missing.join(', ').replace(/_/g, ' ')}. Upload here: ${base}/upload.html?ref=${app.reference}`;
+      }
+      return `Hi ${firstName}, all your documents are in for ${app.reference} — our team is reviewing them, usually within 1 business day.`;
+    }
+    case 'awaiting_signature':
+      return `Hi ${firstName}, you're cleared to sign! Reference ${app.reference}. Reply SIGN to complete it, or use the link we sent you earlier.`;
+    case 'active':
+      return `Hi ${firstName}, your loan (${app.reference}) is active. Message us here anytime if you have questions about your repayments.`;
+    case 'completed':
+      return `Hi ${firstName}, your loan (${app.reference}) is fully paid off. 🎉 Let us know if you'd like to apply again.`;
+    case 'declined':
+      return `Hi ${firstName}, your application (${app.reference}) didn't move forward. Reply START if you'd like to try again with different details.`;
+    case 'manual_review':
+      return `Hi ${firstName}, your application (${app.reference}) is still with our team for review — we'll be in touch within 1 business day.`;
+    default:
+      return `Hi ${firstName}, your application (${app.reference}) status is: ${app.status.replace(/_/g, ' ')}.`;
   }
 }
 
@@ -365,7 +431,7 @@ async function finalizeApplication(session) {
       accountNumber: d.accountNumber,
       branchCode: d.branchCode,
     },
-    { channel: 'whatsapp', baseUrl: process.env.PUBLIC_APP_URL || 'https://your-domain.example' }
+    { channel: 'whatsapp', baseUrl: getPublicAppUrl() }
   );
 
   if (!result.ok) {
