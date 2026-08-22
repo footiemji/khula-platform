@@ -86,4 +86,70 @@ async function sendWhatsAppTemplate(to, templateName, languageCode, bodyParams =
   }
 }
 
-module.exports = { sendWhatsAppMessage, sendWhatsAppTemplate };
+// Sends a WhatsApp "list message" — a tappable native picker, up to 10
+// options total. This is what replaces "reply with a number 1-4": the
+// customer taps an option instead of typing a digit, which is both less
+// error-prone and, per direct user feedback, considerably less confusing.
+//
+// `options` is an array of { id, title } — title must be 24 characters or
+// fewer (a WhatsApp platform limit), so keep labels short. `id` is what
+// comes back in the webhook reply and can be any string — using the
+// actual semantic value (e.g. "single", "married_in_community") rather
+// than a numeric index means the conversation handler doesn't need a
+// separate lookup table to interpret the reply.
+async function sendWhatsAppList(to, bodyText, buttonLabel, options) {
+  if (!process.env.WHATSAPP_ACCESS_TOKEN || !process.env.WHATSAPP_PHONE_NUMBER_ID) {
+    console.log(`[WhatsApp LIST OUT -> ${to}] (dev mode, not actually sent): "${bodyText}" options=${JSON.stringify(options.map((o) => o.title))}`);
+    return true;
+  }
+
+  try {
+    const result = await callGraphAPI({
+      messaging_product: 'whatsapp',
+      to,
+      type: 'interactive',
+      interactive: {
+        type: 'list',
+        body: { text: bodyText },
+        action: {
+          button: buttonLabel,
+          sections: [{ title: 'Options', rows: options.map((o) => ({ id: o.id, title: o.title })) }],
+        },
+      },
+    });
+    return result.ok;
+  } catch (err) {
+    console.error(`[WhatsApp LIST SEND FAILED -> ${to}] Network/request error:`, err.message);
+    return false;
+  }
+}
+
+// Sends WhatsApp "reply buttons" — up to 3 tappable options shown directly
+// under the message, no extra tap to open a list. Best for short, binary
+// or ternary choices (yes/no, agree/decline). Button titles are limited
+// to 20 characters by WhatsApp.
+async function sendWhatsAppButtons(to, bodyText, options) {
+  if (!process.env.WHATSAPP_ACCESS_TOKEN || !process.env.WHATSAPP_PHONE_NUMBER_ID) {
+    console.log(`[WhatsApp BUTTONS OUT -> ${to}] (dev mode, not actually sent): "${bodyText}" options=${JSON.stringify(options.map((o) => o.title))}`);
+    return true;
+  }
+
+  try {
+    const result = await callGraphAPI({
+      messaging_product: 'whatsapp',
+      to,
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: bodyText },
+        action: { buttons: options.map((o) => ({ type: 'reply', reply: { id: o.id, title: o.title } })) },
+      },
+    });
+    return result.ok;
+  } catch (err) {
+    console.error(`[WhatsApp BUTTONS SEND FAILED -> ${to}] Network/request error:`, err.message);
+    return false;
+  }
+}
+
+module.exports = { sendWhatsAppMessage, sendWhatsAppTemplate, sendWhatsAppList, sendWhatsAppButtons };

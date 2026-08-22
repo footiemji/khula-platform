@@ -3,6 +3,7 @@ const db = require('../lib/db');
 const { sendWhatsAppMessage } = require('../lib/whatsappSender');
 const { createApplication, signApplication, getPublicAppUrl } = require('../lib/applicationEngine');
 const { matchBankName } = require('../lib/bankCodes');
+const { sendWhatsAppList, sendWhatsAppButtons } = require('../lib/whatsappSender');
 
 const router = express.Router();
 
@@ -79,23 +80,78 @@ router.post('/webhook', async (req, res) => {
   if (!message) return; // no inbound message on this webhook call (e.g. it was a status update, handled above)
 
   const from = message.from; // WhatsApp user's phone number (E.164, no +)
-  const text = (message.text?.body || '').trim();
+  // Tapping a list/button option comes back as message.interactive.*_reply.id
+  // rather than a text body — extract whichever applies. Using the
+  // semantic id (e.g. "single", "married_in_community") set when the list
+  // was sent means the conversation handlers below don't need a separate
+  // lookup table to interpret a tapped reply versus typed text.
+  const text = (
+    message.interactive?.list_reply?.id ||
+    message.interactive?.button_reply?.id ||
+    message.text?.body ||
+    ''
+  ).trim();
 
   runSerialized(from, async () => {
-    const session = await getOrCreateSession(from);
+    const { session, isNew } = await getOrCreateSession(from);
+
+    // If this is a brand-new conversation AND there's a recent, unverified
+    // OTP request for this number, they almost certainly got here by
+    // tapping the "message us first" link from the website — not by
+    // deciding to apply natively on WhatsApp. Launching the full
+    // application flow in that case is exactly what caused the reported
+    // confusion: people end up mid-conversation on WhatsApp with no clear
+    // signal to go back, so most just... stay. Redirect them explicitly
+    // instead, while still leaving the door open to continue right here
+    // if that's what they'd rather do.
+    if (isNew && text.length > 0) {
+      const recentOtp = await db.find(
+        'otp_verifications',
+        (o) => o.phone === from && !o.verified && Date.now() - new Date(o.createdAt).getTime() < 10 * 60 * 1000
+      );
+      if (recentOtp) {
+        session.step = 'post_web_redirect';
+        session.data.redirectedAt = new Date().toISOString();
+        await saveSession(session);
+        await sendWhatsAppMessage(
+          from,
+          "Thanks — you're all set! Head back to the website to continue your application.\n\nPrefer to finish here on WhatsApp instead? Just reply with your full name and we'll carry on right here."
+        );
+        return;
+      }
+    }
+
     const reply = await advanceConversation(session, text);
-    await sendWhatsAppMessage(from, reply);
+    await sendReply(from, reply);
   });
 });
+
+// Dispatches an advanceConversation() result to the right WhatsApp send
+// function. Most steps just return a plain string (sent as normal text);
+// steps with a small, fixed set of options return a small descriptor
+// object instead, so the customer gets a real tappable list/buttons
+// rather than being asked to type a number — this is what actually fixes
+// "reply with 1-4", not just clearer wording around it.
+async function sendReply(to, reply) {
+  if (typeof reply === 'string') {
+    return sendWhatsAppMessage(to, reply);
+  }
+  if (reply.interactive === 'list') {
+    return sendWhatsAppList(to, reply.body, reply.buttonLabel || 'Select', reply.options);
+  }
+  if (reply.interactive === 'buttons') {
+    return sendWhatsAppButtons(to, reply.body, reply.options);
+  }
+  return sendWhatsAppMessage(to, String(reply));
+}
 
 function getOrCreateSession(phone) {
   return (async () => {
     let session = await db.find('conversations', (c) => c.phone === phone);
-    if (!session) {
-      session = { phone, step: 'welcome', data: {}, updatedAt: new Date().toISOString() };
-      await db.insert('conversations', session);
-    }
-    return session;
+    if (session) return { session, isNew: false };
+    session = { phone, step: 'welcome', data: {}, updatedAt: new Date().toISOString() };
+    await db.insert('conversations', session);
+    return { session, isNew: true };
   })();
 }
 
@@ -114,6 +170,25 @@ async function saveSession(session) {
 // round-trips would be worse UX than the form it's replacing, not better.
 async function advanceConversation(session, text) {
   switch (session.step) {
+    case 'post_web_redirect': {
+      // Someone who was told "head back to the website" and then messaged
+      // again. If it's soon after (they're clearly choosing to continue
+      // here instead), treat their message as the start of a native
+      // WhatsApp application. If it's been a while, they probably went
+      // back to the website, finished there, and are now messaging for an
+      // unrelated reason (a status check, a question) — don't wrongly
+      // swallow that as if it were their name.
+      const redirectedAt = new Date(session.data.redirectedAt || 0);
+      const minutesSinceRedirect = (Date.now() - redirectedAt.getTime()) / (1000 * 60);
+      if (minutesSinceRedirect < 30) {
+        session.data.fullName = text;
+        session.step = 'ask_id';
+        await saveSession(session);
+        return `Thanks ${text.split(' ')[0]}. What's your 13-digit South African ID number? (This stays private and is only used to verify your identity.)`;
+      }
+      return await checkExistingOrOfferFresh(session);
+    }
+
     case 'welcome':
       session.step = 'ask_name';
       await saveSession(session);
@@ -132,57 +207,105 @@ async function advanceConversation(session, text) {
       session.data.idNumber = text.replace(/\s/g, '');
       session.step = 'ask_marital_status';
       await saveSession(session);
-      return 'Marital status?\n1) Single\n2) Married in community of property\n3) Married out of community of property\n4) Divorced / widowed\n\nReply with a number 1-4.';
+      return {
+        interactive: 'list',
+        body: 'Marital status?',
+        buttonLabel: 'Select',
+        options: [
+          { id: 'single', title: 'Single' },
+          { id: 'married_in_community', title: 'Married in community' },
+          { id: 'married_out_of_community', title: 'Married out of comm.' },
+          { id: 'divorced_widowed', title: 'Divorced/widowed' },
+        ],
+      };
 
     case 'ask_marital_status': {
-      const map = { 1: 'single', 2: 'married_in_community', 3: 'married_out_of_community', 4: 'divorced_widowed' };
-      const choice = map[text.trim()];
-      if (!choice) return 'Please reply with a number from 1 to 4.';
-      session.data.maritalStatus = choice;
+      const valid = ['single', 'married_in_community', 'married_out_of_community', 'divorced_widowed'];
+      if (!valid.includes(text)) {
+        return { interactive: 'list', body: 'Please pick one from the list.', buttonLabel: 'Select', options: valid.map((v) => ({ id: v, title: v.replace(/_/g, ' ') })) };
+      }
+      session.data.maritalStatus = text;
       session.step = 'ask_residential_status';
       await saveSession(session);
-      return 'And your living situation?\n1) Own home (bond)\n2) Own home (paid off)\n3) Renting\n4) Living with family\n\nReply with a number 1-4.';
+      return {
+        interactive: 'list',
+        body: 'And your living situation?',
+        buttonLabel: 'Select',
+        options: [
+          { id: 'own_bonded', title: 'Own home (bond)' },
+          { id: 'own_paid_off', title: 'Own home (paid off)' },
+          { id: 'renting', title: 'Renting' },
+          { id: 'living_with_family', title: 'Living with family' },
+        ],
+      };
     }
 
     case 'ask_residential_status': {
-      const map = { 1: 'own_bonded', 2: 'own_paid_off', 3: 'renting', 4: 'living_with_family' };
-      const choice = map[text.trim()];
-      if (!choice) return 'Please reply with a number from 1 to 4.';
-      session.data.residentialStatus = choice;
+      const valid = ['own_bonded', 'own_paid_off', 'renting', 'living_with_family'];
+      if (!valid.includes(text)) {
+        return { interactive: 'list', body: 'Please pick one from the list.', buttonLabel: 'Select', options: valid.map((v) => ({ id: v, title: v.replace(/_/g, ' ') })) };
+      }
+      session.data.residentialStatus = text;
       session.step = 'ask_debt_review';
       await saveSession(session);
-      return 'Are you currently under debt review? Reply YES or NO. (If yes, we won\'t be able to proceed — this is a legal requirement, not a Khula policy choice.)';
+      return {
+        interactive: 'buttons',
+        body: "Are you currently under debt review? (If yes, we won't be able to proceed — this is a legal requirement, not a Khula policy choice.)",
+        options: [{ id: 'no', title: 'No' }, { id: 'yes', title: 'Yes' }],
+      };
     }
 
     case 'ask_debt_review':
-      session.data.underDebtReview = /^y(es)?$/i.test(text.trim());
+      session.data.underDebtReview = text === 'yes' || /^y(es)?$/i.test(text.trim());
       session.step = 'ask_consent_bundle';
       await saveSession(session);
-      return 'Almost through the legal bits — please confirm ALL of the following by replying AGREE:\n\n' +
-        '✓ I consent to Khula processing my personal information under POPIA\n' +
-        '✓ I consent to a credit bureau check being run on my profile\n' +
-        '✓ All information I provide is true, accurate, and complete\n' +
-        '✓ I have not withheld anything that could affect this decision\n' +
-        '✓ I authorise Khula to verify the information I provide\n' +
-        '✓ I understand this does not guarantee approval\n\n' +
-        'Reply AGREE to continue, or STOP if you don\'t consent (we can\'t proceed without this).';
+      return {
+        interactive: 'buttons',
+        body: 'Almost through the legal bits — please confirm ALL of the following:\n\n' +
+          '✓ I consent to Khula processing my personal information under POPIA\n' +
+          '✓ I consent to a credit bureau check being run on my profile\n' +
+          '✓ All information I provide is true, accurate, and complete\n' +
+          '✓ I have not withheld anything that could affect this decision\n' +
+          '✓ I authorise Khula to verify the information I provide\n' +
+          '✓ I understand this does not guarantee approval',
+        options: [{ id: 'agree', title: 'I agree' }, { id: 'stop', title: 'Stop' }],
+      };
 
     case 'ask_consent_bundle':
-      if (!/^agree$/i.test(text.trim())) {
-        return 'We need your agreement to all of the above to continue. Reply AGREE when you\'re ready, or STOP to end here.';
+      if (text === 'stop' || /^stop$/i.test(text.trim())) {
+        return "No problem — we can't proceed without this consent, but message us anytime if you change your mind.";
+      }
+      if (text !== 'agree' && !/^agree$/i.test(text.trim())) {
+        return {
+          interactive: 'buttons',
+          body: "We need your agreement to all of the above to continue.",
+          options: [{ id: 'agree', title: 'I agree' }, { id: 'stop', title: 'Stop' }],
+        };
       }
       session.data.popiaConsent = true;
       session.data.creditBureauConsent = true;
       session.data.declarationsAccepted = true;
       session.step = 'ask_employment';
       await saveSession(session);
-      return 'What best describes your employment?\n1) Permanent employee\n2) Contract employee\n3) Self-employed\n4) Informal / piece work\n5) Unemployed\n\nReply with a number 1-5.';
+      return {
+        interactive: 'list',
+        body: 'What best describes your employment?',
+        buttonLabel: 'Select',
+        options: [
+          { id: 'formal_permanent', title: 'Permanent employee' },
+          { id: 'formal_contract', title: 'Contract employee' },
+          { id: 'self_employed', title: 'Self-employed' },
+          { id: 'informal', title: 'Informal/piece work' },
+          { id: 'unemployed', title: 'Unemployed' },
+        ],
+      };
 
     case 'ask_employment': {
-      const map = { 1: 'formal_permanent', 2: 'formal_contract', 3: 'self_employed', 4: 'informal', 5: 'unemployed' };
-      const choice = map[text.trim()];
-      if (!choice) return 'Please reply with a number from 1 to 5.';
-      session.data.employmentType = choice;
+      const valid = ['formal_permanent', 'formal_contract', 'self_employed', 'informal', 'unemployed'];
+      if (!valid.includes(text)) {
+        return { interactive: 'list', body: 'Please pick one from the list.', buttonLabel: 'Select', options: valid.map((v) => ({ id: v, title: v.replace(/_/g, ' ') })) };
+      }
+      session.data.employmentType = text;
       session.step = 'ask_employer_details';
       await saveSession(session);
       return "Employer/business name and their phone number, in one message like:\nABC Traders, 0115551234\n\n(Reply 'skip' if self-employed/informal with no fixed employer)";
@@ -261,13 +384,17 @@ async function advanceConversation(session, text) {
       session.data.requestedAmount = amount;
       session.step = 'ask_term';
       await saveSession(session);
-      return `Over how many months would you like to repay? (1-${process.env.MAX_TERM_MONTHS || 60})`;
+      return {
+        interactive: 'buttons',
+        body: `Over how many months would you like to repay? Pick a common option, or just type a number (1-${process.env.MAX_TERM_MONTHS || 60}).`,
+        options: [{ id: '3', title: '3 months' }, { id: '6', title: '6 months' }, { id: '12', title: '12 months' }],
+      };
     }
 
     case 'ask_term': {
       const term = Number(text.replace(/[^\d.]/g, ''));
       const maxTerm = Number(process.env.MAX_TERM_MONTHS || 60);
-      if (!term || term < 1 || term > maxTerm) return `Please reply with a number of months between 1 and ${maxTerm}.`;
+      if (!term || term < 1 || term > maxTerm) return `Please reply with a number of months between 1 and ${maxTerm}, or tap one of the options above.`;
       session.data.termMonths = term;
       session.step = 'ask_purpose';
       await saveSession(session);
@@ -284,9 +411,33 @@ async function advanceConversation(session, text) {
       session.data.bankAccountHolder = text;
       session.step = 'ask_bank_name';
       await saveSession(session);
-      return 'Which bank?';
+      return {
+        interactive: 'list',
+        body: 'Which bank?',
+        buttonLabel: 'Select bank',
+        // WhatsApp lists cap out at 10 rows total — trimmed to the 9 most
+        // commonly used banks plus "Other" rather than the full list the
+        // web/agent dropdowns can show, which don't have that limit.
+        options: [
+          { id: 'Absa', title: 'Absa' },
+          { id: 'African Bank', title: 'African Bank' },
+          { id: 'Capitec', title: 'Capitec' },
+          { id: 'Discovery Bank', title: 'Discovery Bank' },
+          { id: 'FNB', title: 'FNB' },
+          { id: 'Investec', title: 'Investec' },
+          { id: 'Nedbank', title: 'Nedbank' },
+          { id: 'Standard Bank', title: 'Standard Bank' },
+          { id: 'TymeBank', title: 'TymeBank' },
+          { id: 'Other', title: 'Other' },
+        ],
+      };
 
     case 'ask_bank_name': {
+      if (text === 'Other') {
+        session.step = 'ask_bank_name_other';
+        await saveSession(session);
+        return 'No problem — please type your bank\'s name.';
+      }
       session.data.bankName = text;
       const matched = matchBankName(text);
       session.step = 'ask_account_number';
@@ -295,6 +446,21 @@ async function advanceConversation(session, text) {
         // to ask for it at all.
         session.data.branchCode = matched.branchCode;
         session.data.bankName = matched.name; // use the canonical name, not whatever variant they typed
+        session.data.branchCodeAutoFilled = true;
+        await saveSession(session);
+        return `Got it — ${matched.name} (branch code ${matched.branchCode} filled in automatically). Account number?`;
+      }
+      await saveSession(session);
+      return 'Account number?';
+    }
+
+    case 'ask_bank_name_other': {
+      session.data.bankName = text;
+      const matched = matchBankName(text);
+      session.step = 'ask_account_number';
+      if (matched && matched.branchCode) {
+        session.data.branchCode = matched.branchCode;
+        session.data.bankName = matched.name;
         session.data.branchCodeAutoFilled = true;
         await saveSession(session);
         return `Got it — ${matched.name} (branch code ${matched.branchCode} filled in automatically). Account number?`;
@@ -331,24 +497,7 @@ async function advanceConversation(session, text) {
       // starting fresh. Blindly resetting here (the old behaviour) broke
       // the platform's own promise to "message us anytime to check your
       // status": there was no status check at all, just a silent restart.
-      const existing = await db.find('applications', (a) => a.phoneNumber?.replace(/\D/g, '').endsWith(session.phone.replace(/\D/g, '').slice(-9)));
-      if (existing && existing.status === 'awaiting_signature') {
-        session.step = 'awaiting_sign_name';
-        session.data.signingReference = existing.reference;
-        await saveSession(session);
-        return statusMessageFor(existing);
-      }
-      if (existing) {
-        session.step = 'welcome';
-        session.data = {};
-        await saveSession(session);
-        return statusMessageFor(existing);
-      }
-
-      session.step = 'welcome';
-      session.data = {};
-      await saveSession(session);
-      return "Let's start a new application. What's your full name?";
+      return await checkExistingOrOfferFresh(session);
     }
 
     case 'awaiting_sign_name': {
@@ -366,6 +515,27 @@ async function advanceConversation(session, text) {
       return "Please type your full name exactly as it appears on your application — that's your signature.";
     }
   }
+}
+
+async function checkExistingOrOfferFresh(session) {
+  const existing = await db.find('applications', (a) => a.phoneNumber?.replace(/\D/g, '').endsWith(session.phone.replace(/\D/g, '').slice(-9)));
+  if (existing && existing.status === 'awaiting_signature') {
+    session.step = 'awaiting_sign_name';
+    session.data.signingReference = existing.reference;
+    await saveSession(session);
+    return statusMessageFor(existing);
+  }
+  if (existing) {
+    session.step = 'welcome';
+    session.data = {};
+    await saveSession(session);
+    return statusMessageFor(existing);
+  }
+
+  session.step = 'welcome';
+  session.data = {};
+  await saveSession(session);
+  return "Let's start a new application. What's your full name?";
 }
 
 // Builds a plain-language status update for an existing application —
