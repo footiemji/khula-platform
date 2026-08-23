@@ -217,4 +217,29 @@ async function sendWhatsAppCtaUrl(to, bodyText, buttonText, url) {
   }
 }
 
-module.exports = { sendWhatsAppMessage, sendWhatsAppTemplate, sendWhatsAppList, sendWhatsAppButtons, sendWhatsAppCtaUrl };
+// Sends an actual document (PDF, etc.) via a public URL WhatsApp fetches
+// directly — this is the standard, well-documented WhatsApp media message
+// type (unlike the Authentication button structure, which had a genuine
+// undocumented gotcha). The URL must be publicly reachable with no auth,
+// since Meta's servers retrieve it themselves, not the recipient's phone.
+async function sendWhatsAppDocument(to, documentUrl, filename, caption) {
+  if (!process.env.WHATSAPP_ACCESS_TOKEN || !process.env.WHATSAPP_PHONE_NUMBER_ID) {
+    console.log(`[WhatsApp DOCUMENT OUT -> ${to}] (dev mode, not actually sent): ${filename} <- ${documentUrl}`);
+    return true;
+  }
+
+  try {
+    const result = await callGraphAPI({
+      messaging_product: 'whatsapp',
+      to,
+      type: 'document',
+      document: { link: documentUrl, filename, caption },
+    });
+    return result.ok;
+  } catch (err) {
+    console.error(`[WhatsApp DOCUMENT SEND FAILED -> ${to}] Network/request error:`, err.message);
+    return false;
+  }
+}
+
+module.exports = { sendWhatsAppMessage, sendWhatsAppTemplate, sendWhatsAppList, sendWhatsAppButtons, sendWhatsAppCtaUrl, sendWhatsAppDocument };

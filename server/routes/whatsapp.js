@@ -3,7 +3,7 @@ const db = require('../lib/db');
 const { sendWhatsAppMessage } = require('../lib/whatsappSender');
 const { createApplication, signApplication, getPublicAppUrl } = require('../lib/applicationEngine');
 const { matchBankName } = require('../lib/bankCodes');
-const { sendWhatsAppList, sendWhatsAppButtons, sendWhatsAppCtaUrl } = require('../lib/whatsappSender');
+const { sendWhatsAppList, sendWhatsAppButtons, sendWhatsAppCtaUrl, sendWhatsAppDocument } = require('../lib/whatsappSender');
 
 const router = express.Router();
 
@@ -657,21 +657,30 @@ async function finalizeApplication(session) {
     const q = quotation;
     const firstName = d.fullName.split(' ')[0];
     const ceilingNote = q.aboveShortTermCreditCeiling
-      ? `\n\n⚠️ Above R${q.shortTermCreditCeiling} — needs compliance confirmation on applicable fee/interest caps before this quote is final.`
+      ? ` ⚠️ Above R${q.shortTermCreditCeiling} — needs compliance confirmation on applicable fee/interest caps before this quote is final.`
       : '';
-    const body = `Good news, ${firstName}! Here's your quote for R${d.requestedAmount} over ${d.termMonths} months:\n\n` +
-      `• Interest: ${(q.monthlyInterestRate * 100).toFixed(1)}%/month\n` +
-      `• Initiation fee: R${q.initiationFee.toFixed(2)}\n` +
-      `• Monthly service fee: R${q.monthlyServiceFee.toFixed(2)}\n` +
-      `• Insurance: from R${q.schedule[0].insurancePremium.toFixed(2)}/month\n` +
-      `• First instalment: R${q.firstMonthInstalment.toFixed(2)}\n` +
-      `• Total repayable: R${q.totalRepayable.toFixed(2)}\n\n` +
-      `Reference ${reference}. We need 4 PDF documents before payout: ID, proof of address, 3 months' bank statements (or latest payslip), and proof of your bank account.${ceilingNote}\n\nOur team reviews within 1 business day. Message us here anytime to check your status.`;
+    const base = getPublicAppUrl();
+
+    // Short summary first, then the actual formatted PDF (same document
+    // the web flow shows via "View pre-agreement statement"), then the
+    // upload action — three focused messages instead of one long wall of
+    // text trying to do everything at once.
+    await sendWhatsAppMessage(
+      session.phone,
+      `Good news, ${firstName}! You're approved for R${d.requestedAmount} over ${d.termMonths} months — first instalment R${q.firstMonthInstalment.toFixed(2)}, total repayable R${q.totalRepayable.toFixed(2)}. Full breakdown in the PDF below.${ceilingNote}`
+    );
+    await sendWhatsAppDocument(
+      session.phone,
+      `${base}/api/applications/${reference}/pre-agreement.pdf`,
+      `Khula-Pre-Agreement-${reference}.pdf`,
+      'Your quote and pre-agreement statement'
+    );
+
     return {
       interactive: 'cta',
-      body,
+      body: `Reference ${reference}. We need 4 PDF documents before payout: ID, proof of address, 3 months' bank statements (or latest payslip), and proof of your bank account. Our team reviews within 1 business day — message us here anytime to check your status.`,
       buttonLabel: 'Upload documents',
-      url: `${getPublicAppUrl()}/upload.html?ref=${reference}`,
+      url: `${base}/upload.html?ref=${reference}`,
     };
   }
 
