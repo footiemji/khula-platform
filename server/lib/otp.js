@@ -85,7 +85,8 @@ async function requestOtp(phoneNumber) {
         waMessagingPhone,
         process.env.WHATSAPP_OTP_TEMPLATE_NAME,
         process.env.WHATSAPP_OTP_TEMPLATE_LANG || 'en_US',
-        [code]
+        [code],
+        code // also sent as the Copy Code button's parameter — see sendWhatsAppTemplate's comment for why this needs to be duplicated
       )
     : await sendWhatsAppMessage(waMessagingPhone, `Your Khula Financial Services verification code is ${code}. It expires in 5 minutes. Don't share this code with anyone.`);
 

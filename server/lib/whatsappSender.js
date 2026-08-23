@@ -60,10 +60,41 @@ async function sendWhatsAppMessage(to, body) {
 // `bodyParams` fills the template's {{1}}, {{2}}, etc. placeholders, in
 // order — e.g. for an OTP template with body "Your code is {{1}}",
 // pass ['482913'].
-async function sendWhatsAppTemplate(to, templateName, languageCode, bodyParams = []) {
+// Sends a pre-approved WhatsApp template message — the only reliable way
+// to message someone FIRST (an OTP, a payment reminder) outside the
+// 24-hour window a customer's own message opens. Free-form text sent
+// outside that window gets silently non-delivered even though Meta's API
+// reports the send as successful — this is not a workaround, it's the
+// actual supported mechanism for business-initiated messages. See
+// docs/COMPLIANCE.md or README §4 for how to create and get one approved.
+//
+// `bodyParams` fills the template's {{1}}, {{2}}, etc. placeholders, in
+// order — e.g. for an OTP template with body "Your code is {{1}}",
+// pass ['482913'].
+//
+// `copyCodeValue` is REQUIRED for Authentication templates built with a
+// "Copy code" button (as opposed to zero-tap or one-tap autofill) — this
+// is a real, easy-to-miss gotcha: the button needs the code sent again as
+// its own separate component, distinct from the body text substitution.
+// Omitting it produces Meta error 131008 "Required parameter is missing"
+// even though the visible message text looks completely correct.
+async function sendWhatsAppTemplate(to, templateName, languageCode, bodyParams = [], copyCodeValue = null) {
   if (!process.env.WHATSAPP_ACCESS_TOKEN || !process.env.WHATSAPP_PHONE_NUMBER_ID) {
-    console.log(`[WhatsApp TEMPLATE OUT -> ${to}] (dev mode, not actually sent): template=${templateName}, params=${JSON.stringify(bodyParams)}`);
+    console.log(`[WhatsApp TEMPLATE OUT -> ${to}] (dev mode, not actually sent): template=${templateName}, params=${JSON.stringify(bodyParams)}${copyCodeValue ? `, copyCode=${copyCodeValue}` : ''}`);
     return true;
+  }
+
+  const components = [];
+  if (bodyParams.length) {
+    components.push({ type: 'body', parameters: bodyParams.map((p) => ({ type: 'text', text: String(p) })) });
+  }
+  if (copyCodeValue) {
+    components.push({
+      type: 'button',
+      sub_type: 'COPY_CODE',
+      index: '0',
+      parameters: [{ type: 'coupon_code', coupon_code: String(copyCodeValue) }],
+    });
   }
 
   try {
@@ -71,13 +102,7 @@ async function sendWhatsAppTemplate(to, templateName, languageCode, bodyParams =
       messaging_product: 'whatsapp',
       to,
       type: 'template',
-      template: {
-        name: templateName,
-        language: { code: languageCode },
-        components: bodyParams.length
-          ? [{ type: 'body', parameters: bodyParams.map((p) => ({ type: 'text', text: String(p) })) }]
-          : [],
-      },
+      template: { name: templateName, language: { code: languageCode }, components },
     });
     return result.ok;
   } catch (err) {
