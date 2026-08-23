@@ -518,6 +518,8 @@ router.post('/applications/:reference/legal/enforcement', requireAdmin, asyncHan
 // facts, and confusing them cost real debugging time — the template can
 // be perfectly approved while these env vars are simply never set.
 router.get('/whatsapp-status', requireAdmin, asyncHandler(async (req, res) => {
+  const { getPublicAppUrl } = require('../lib/applicationEngine');
+  const publicUrl = getPublicAppUrl();
   res.json({
     accessTokenSet: Boolean(process.env.WHATSAPP_ACCESS_TOKEN),
     phoneNumberIdSet: Boolean(process.env.WHATSAPP_PHONE_NUMBER_ID),
@@ -527,6 +529,12 @@ router.get('/whatsapp-status', requireAdmin, asyncHandler(async (req, res) => {
     otpTemplateName: process.env.WHATSAPP_OTP_TEMPLATE_NAME || null,
     otpTemplateLang: process.env.WHATSAPP_OTP_TEMPLATE_LANG || null,
     otpSendMode: process.env.WHATSAPP_OTP_TEMPLATE_NAME ? 'template (works anytime)' : 'plain text (requires an open 24-hour window)',
+    // Catches exactly the bug that shipped a real "https://your-domain.example"
+    // link to a customer: PUBLIC_APP_URL was never actually set, so every
+    // document-upload and quote link silently pointed at a fake domain
+    // instead of erroring loudly.
+    publicAppUrl: publicUrl,
+    publicAppUrlConfigured: publicUrl !== 'https://your-domain.example',
   });
 }));
 

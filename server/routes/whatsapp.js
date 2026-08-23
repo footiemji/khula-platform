@@ -95,6 +95,41 @@ router.post('/webhook', async (req, res) => {
   runSerialized(from, async () => {
     const { session, isNew } = await getOrCreateSession(from);
 
+    // Two independent safety nets against a stale, abandoned conversation
+    // permanently intercepting every future message from that number —
+    // this is exactly what happened when a session stuck mid-application
+    // (e.g. at the ID-number step) kept swallowing "Hi" and "LOAN" weeks
+    // later, since sessions never expired on their own.
+    //
+    // 1. An explicit, deliberate reset keyword — exact match only, never a
+    //    substring, so someone genuinely answering "car loan repayment" as
+    //    their loan purpose is never mistaken for wanting to start over.
+    const RESET_KEYWORDS = ['loan', 'hi', 'hello', 'start'];
+    const isResetKeyword = RESET_KEYWORDS.includes(text.toLowerCase().trim());
+
+    // 2. A staleness timeout — if a session has sat untouched for a while,
+    //    the safest assumption is that the person walked away and is
+    //    starting fresh now, not continuing exactly where a much earlier
+    //    attempt left off.
+    const STALE_AFTER_MS = 30 * 60 * 1000; // 30 minutes
+    const isStale = !isNew && Date.now() - new Date(session.updatedAt).getTime() > STALE_AFTER_MS;
+
+    if (!isNew && session.step !== 'welcome' && session.step !== 'done' && (isResetKeyword || isStale)) {
+      // Route through the SAME existing-application lookup the 'done'
+      // case uses, rather than blindly wiping to a blank slate. This is
+      // the fix for a real regression: without this check, someone who'd
+      // already applied, been approved, and uploaded documents — then
+      // came back later to check in — got reset to "what's your full
+      // name?" instead of shown their actual status. A stuck/abandoned
+      // session with no real application behind it (the original bug this
+      // was built to fix) still correctly falls through to a fresh start,
+      // since checkExistingOrOfferFresh finds nothing and offers exactly
+      // that.
+      const reply = await checkExistingOrOfferFresh(session);
+      await sendReply(from, reply);
+      return;
+    }
+
     // If this is a brand-new conversation AND there's a recent, unverified
     // OTP request for this number, they almost certainly got here by
     // tapping the "message us first" link from the website — not by

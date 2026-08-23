@@ -163,12 +163,15 @@
       if (missing.length > 0) {
         banner.style.display = 'block';
         banner.innerHTML = `<div style="background:rgba(226,75,74,0.12); border:1px solid var(--danger); border-radius:10px; padding:12px 16px; font-size:13px;">⚠️ WhatsApp isn't fully configured — missing: <strong>${missing.join(', ')}</strong>. Nothing will send until these are set in Render.</div>`;
+      } else if (!s.publicAppUrlConfigured) {
+        banner.style.display = 'block';
+        banner.innerHTML = `<div style="background:rgba(226,75,74,0.12); border:1px solid var(--danger); border-radius:10px; padding:12px 16px; font-size:13px;">⚠️ <code>PUBLIC_APP_URL</code> isn't set — every document-upload and quote link sent to customers is currently pointing at a fake placeholder domain (<code>${s.publicAppUrl}</code>). Set <code>PUBLIC_APP_URL=https://www.khulafs.co.za</code> in Render immediately.</div>`;
       } else if (!s.otpTemplateConfigured) {
         banner.style.display = 'block';
         banner.innerHTML = `<div style="background:rgba(200,155,42,0.12); border:1px solid var(--gold); border-radius:10px; padding:12px 16px; font-size:13px;">📋 OTPs are sending as <strong>plain text</strong> — this only delivers within 24 hours of the customer messaging in first. If your Authentication template is approved on Meta's side, set <code>WHATSAPP_OTP_TEMPLATE_NAME</code> (and <code>WHATSAPP_OTP_TEMPLATE_LANG</code> if not English) in Render to switch to reliable template delivery.</div>`;
       } else {
         banner.style.display = 'block';
-        banner.innerHTML = `<div style="background:rgba(44,95,45,0.12); border:1px solid var(--forest); border-radius:10px; padding:12px 16px; font-size:13px;">✓ WhatsApp fully configured — OTPs sending via template <strong>${s.otpTemplateName}</strong> (${s.otpTemplateLang}).</div>`;
+        banner.innerHTML = `<div style="background:rgba(44,95,45,0.12); border:1px solid var(--forest); border-radius:10px; padding:12px 16px; font-size:13px;">✓ WhatsApp fully configured — links point to <strong>${s.publicAppUrl}</strong>, OTPs sending via template <strong>${s.otpTemplateName}</strong> (${s.otpTemplateLang}).</div>`;
       }
     } catch {
       banner.style.display = 'none';
