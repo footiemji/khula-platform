@@ -89,11 +89,20 @@ async function sendWhatsAppTemplate(to, templateName, languageCode, bodyParams =
     components.push({ type: 'body', parameters: bodyParams.map((p) => ({ type: 'text', text: String(p) })) });
   }
   if (copyCodeValue) {
+    // Authentication OTP "Copy code" buttons are, underneath, a URL button
+    // whose target is a whatsapp.com deep link with the code embedded as a
+    // dynamic parameter — NOT the "coupon_code" parameter type used by
+    // Marketing-category coupon buttons, which look identical in the
+    // WhatsApp Manager UI but are a completely different structure. Using
+    // the coupon_code shape (a reasonable first guess, since it's what
+    // most third-party docs show for "copy code" generically) is exactly
+    // what produced Meta's generic "issue with the parameters" error —
+    // this distinction isn't obvious from the UI at all.
     components.push({
       type: 'button',
-      sub_type: 'COPY_CODE',
+      sub_type: 'url',
       index: '0',
-      parameters: [{ type: 'coupon_code', coupon_code: String(copyCodeValue) }],
+      parameters: [{ type: 'text', text: String(copyCodeValue) }],
     });
   }
 
