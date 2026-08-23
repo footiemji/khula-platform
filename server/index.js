@@ -4,6 +4,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
+const asyncHandler = require('./lib/asyncHandler');
 
 const applicationsRouter = require('./routes/applications');
 const adminRouter = require('./routes/admin');
@@ -78,6 +79,25 @@ app.get('/api/health', (req, res) => res.json({ status: 'ok', service: 'khula-fi
 // for building a wa.me deep link, so it's not hardcoded into static HTML.
 app.get('/api/config', (req, res) => res.json({
   whatsappBusinessNumber: process.env.WHATSAPP_BUSINESS_NUMBER || null,
+  otpTemplateConfigured: Boolean(process.env.WHATSAPP_OTP_TEMPLATE_NAME),
+}));
+
+// GET /api/whatsapp-qr.png — a scannable QR code for the WhatsApp entry
+// point, pre-filled with "LOAN" so desktop visitors get the exact same
+// deliberate-first-message signal as someone tapping the wa.me link
+// directly on their phone. Generated on demand rather than as a static
+// asset, since the underlying number is only known at runtime from env
+// config.
+const QRCode = require('qrcode');
+app.get('/api/whatsapp-qr.png', asyncHandler(async (req, res) => {
+  const number = process.env.WHATSAPP_BUSINESS_NUMBER;
+  if (!number) return res.status(404).send('WhatsApp number not configured yet.');
+
+  const waLink = `https://wa.me/${number}?text=${encodeURIComponent('LOAN')}`;
+  const buffer = await QRCode.toBuffer(waLink, { width: 300, margin: 1, color: { dark: '#16321A', light: '#00000000' } });
+  res.set('Content-Type', 'image/png');
+  res.set('Cache-Control', 'public, max-age=3600'); // number doesn't change often — safe to cache for an hour
+  res.send(buffer);
 }));
 
 // South African bank list + branch codes, for the payout bank dropdown —

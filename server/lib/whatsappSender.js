@@ -152,4 +152,35 @@ async function sendWhatsAppButtons(to, bodyText, options) {
   }
 }
 
-module.exports = { sendWhatsAppMessage, sendWhatsAppTemplate, sendWhatsAppList, sendWhatsAppButtons };
+// Sends a WhatsApp "call-to-action URL" message — a real tappable button
+// that opens a link, as opposed to a plain-text URL that WhatsApp may or
+// may not auto-linkify depending on formatting and client version. This
+// is the reliable fix for "the link isn't clickable": don't rely on text
+// parsing at all, send an actual button. `bodyText` can hold the full
+// message (e.g. the quotation breakdown) — the button sits below it as
+// its own distinct tap target, up to 1024 characters in the body.
+async function sendWhatsAppCtaUrl(to, bodyText, buttonText, url) {
+  if (!process.env.WHATSAPP_ACCESS_TOKEN || !process.env.WHATSAPP_PHONE_NUMBER_ID) {
+    console.log(`[WhatsApp CTA-URL OUT -> ${to}] (dev mode, not actually sent): "${bodyText.slice(0, 60)}..." button="${buttonText}" url=${url}`);
+    return true;
+  }
+
+  try {
+    const result = await callGraphAPI({
+      messaging_product: 'whatsapp',
+      to,
+      type: 'interactive',
+      interactive: {
+        type: 'cta_url',
+        body: { text: bodyText },
+        action: { name: 'cta_url', parameters: { display_text: buttonText, url } },
+      },
+    });
+    return result.ok;
+  } catch (err) {
+    console.error(`[WhatsApp CTA-URL SEND FAILED -> ${to}] Network/request error:`, err.message);
+    return false;
+  }
+}
+
+module.exports = { sendWhatsAppMessage, sendWhatsAppTemplate, sendWhatsAppList, sendWhatsAppButtons, sendWhatsAppCtaUrl };

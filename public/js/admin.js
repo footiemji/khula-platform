@@ -144,7 +144,35 @@
   }
 
   async function refresh() {
-    await Promise.all([loadStats(), loadApplications()]);
+    await Promise.all([loadStats(), loadApplications(), loadWhatsAppStatus()]);
+  }
+
+  // A real, always-visible check instead of guessing whether OTPs/
+  // reminders will actually deliver. If the template isn't wired up, this
+  // is what would have caught it immediately instead of debugging blind.
+  async function loadWhatsAppStatus() {
+    const banner = document.getElementById('whatsappStatusBanner');
+    try {
+      const res = await authedFetch('/api/admin/whatsapp-status');
+      const s = await res.json();
+      const missing = [];
+      if (!s.accessTokenSet) missing.push('WHATSAPP_ACCESS_TOKEN');
+      if (!s.phoneNumberIdSet) missing.push('WHATSAPP_PHONE_NUMBER_ID');
+      if (!s.businessNumberSet) missing.push('WHATSAPP_BUSINESS_NUMBER');
+
+      if (missing.length > 0) {
+        banner.style.display = 'block';
+        banner.innerHTML = `<div style="background:rgba(226,75,74,0.12); border:1px solid var(--danger); border-radius:10px; padding:12px 16px; font-size:13px;">⚠️ WhatsApp isn't fully configured — missing: <strong>${missing.join(', ')}</strong>. Nothing will send until these are set in Render.</div>`;
+      } else if (!s.otpTemplateConfigured) {
+        banner.style.display = 'block';
+        banner.innerHTML = `<div style="background:rgba(200,155,42,0.12); border:1px solid var(--gold); border-radius:10px; padding:12px 16px; font-size:13px;">📋 OTPs are sending as <strong>plain text</strong> — this only delivers within 24 hours of the customer messaging in first. If your Authentication template is approved on Meta's side, set <code>WHATSAPP_OTP_TEMPLATE_NAME</code> (and <code>WHATSAPP_OTP_TEMPLATE_LANG</code> if not English) in Render to switch to reliable template delivery.</div>`;
+      } else {
+        banner.style.display = 'block';
+        banner.innerHTML = `<div style="background:rgba(44,95,45,0.12); border:1px solid var(--forest); border-radius:10px; padding:12px 16px; font-size:13px;">✓ WhatsApp fully configured — OTPs sending via template <strong>${s.otpTemplateName}</strong> (${s.otpTemplateLang}).</div>`;
+      }
+    } catch {
+      banner.style.display = 'none';
+    }
   }
 
   // ---------------- Tabs ----------------

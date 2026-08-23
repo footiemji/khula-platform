@@ -21,7 +21,7 @@
     <div class="badge-row">
       <span class="badge"><span class="dot"></span> POPIA-aligned data handling</span>
       <span class="badge"><span class="dot"></span> NCR-aligned affordability checks</span>
-      <span class="badge"><span class="dot"></span> Level 1 B-BBEE · Njomane Technologies Group</span>
+      <span class="badge"><span class="dot"></span> Level 1 B-BBEE</span>
       <span class="badge"><span class="dot"></span> WhatsApp-native, always</span>
     </div>
 
@@ -41,11 +41,43 @@
           <div class="status">Typically replies instantly</div>
         </div>
         <button id="checkStatusHeaderBtn" class="restart-btn" title="Check an existing application" style="margin-left:auto;">Check status</button>
-        <button id="restartBtn" class="restart-btn" title="Start a new application" style="margin-left:8px;">Start over</button>
+        <button id="restartBtn" class="restart-btn" title="Start a new application" style="margin-left:8px; display:none;">Start over</button>
       </div>
-      <div class="chat-body" id="chatBody"></div>
+
+      <div id="channelChoice" class="channel-choice">
+        <p class="choice-intro">How would you like to apply?</p>
+
+        <button id="chooseWebBtn" class="choice-btn choice-btn-primary">
+          <span class="choice-icon">💬</span>
+          <span>
+            <strong>Continue here on the website</strong>
+            <span class="choice-sub">A guided chat, right in this window</span>
+          </span>
+        </button>
+
+        <button id="chooseWhatsAppBtn" class="choice-btn choice-btn-gold">
+          <span class="choice-icon">📱</span>
+          <span>
+            <strong>Apply on WhatsApp instead</strong>
+            <span class="choice-sub">Same application, on your phone</span>
+          </span>
+        </button>
+
+        <div id="whatsappChoicePanel" style="display:none;">
+          <p class="choice-sub" style="text-align:center; margin-top:16px;">Scan with your phone's camera, or tap below if you're already on mobile. We'll pre-fill "LOAN" to get you started.</p>
+          <img id="waQrImage" src="/api/whatsapp-qr.png" alt="Scan to open WhatsApp and start your application" style="width:160px; height:160px; display:block; margin:12px auto; border-radius:8px;" />
+          <a id="waTapLink" href="#" target="_blank" rel="noopener" class="choice-btn choice-btn-primary" style="text-decoration:none; justify-content:center;">Open WhatsApp</a>
+          <button id="backToChoiceBtn" style="display:block; margin:12px auto 0; background:none; border:none; color:var(--ink-soft); font-size:12.5px; text-decoration:underline; cursor:pointer;">← Back</button>
+        </div>
+
+        <div id="whatsappNotConfigured" style="display:none;">
+          <p class="choice-sub" style="text-align:center; margin-top:12px;">WhatsApp application isn't set up yet — please continue on the website.</p>
+        </div>
+      </div>
+
+      <div class="chat-body" id="chatBody" style="display:none;"></div>
       <div class="quick-replies" id="quickReplies"></div>
-      <div class="chat-input-row">
+      <div class="chat-input-row" id="chatInputRow" style="display:none;">
         <input id="chatInput" type="text" placeholder="Type your reply…" autocomplete="off" />
         <button class="send-btn" id="sendBtn" aria-label="Send">➤</button>
       </div>
@@ -76,7 +108,7 @@
 </div>
 
 <footer>
-  <div>© Khula Financial Services (Pty) Ltd · A Njomane Technologies Group company</div>
+  <div>© Khula Financial Services (Pty) Ltd</div>
   <div><a href="/privacy.html" style="color:inherit;">Privacy Policy</a> · Grow. Thrive. Rise.</div>
 </footer>
 

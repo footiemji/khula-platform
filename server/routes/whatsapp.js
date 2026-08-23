@@ -3,7 +3,7 @@ const db = require('../lib/db');
 const { sendWhatsAppMessage } = require('../lib/whatsappSender');
 const { createApplication, signApplication, getPublicAppUrl } = require('../lib/applicationEngine');
 const { matchBankName } = require('../lib/bankCodes');
-const { sendWhatsAppList, sendWhatsAppButtons } = require('../lib/whatsappSender');
+const { sendWhatsAppList, sendWhatsAppButtons, sendWhatsAppCtaUrl } = require('../lib/whatsappSender');
 
 const router = express.Router();
 
@@ -141,6 +141,9 @@ async function sendReply(to, reply) {
   }
   if (reply.interactive === 'buttons') {
     return sendWhatsAppButtons(to, reply.body, reply.options);
+  }
+  if (reply.interactive === 'cta') {
+    return sendWhatsAppCtaUrl(to, reply.body, reply.buttonLabel, reply.url);
   }
   return sendWhatsAppMessage(to, String(reply));
 }
@@ -550,7 +553,12 @@ function statusMessageFor(app) {
       const missing = required.filter((t) => !uploaded.includes(t));
       const base = getPublicAppUrl();
       if (missing.length > 0) {
-        return `Hi ${firstName}, your application ${app.reference} is still waiting on documents: ${missing.join(', ').replace(/_/g, ' ')}. Upload here: ${base}/upload.html?ref=${app.reference}`;
+        return {
+          interactive: 'cta',
+          body: `Hi ${firstName}, your application ${app.reference} is still waiting on documents: ${missing.join(', ').replace(/_/g, ' ')}.`,
+          buttonLabel: 'Upload documents',
+          url: `${base}/upload.html?ref=${app.reference}`,
+        };
       }
       return `Hi ${firstName}, all your documents are in for ${app.reference} — our team is reviewing them, usually within 1 business day.`;
     }
@@ -608,7 +616,31 @@ async function finalizeApplication(session) {
     return `Sorry, ${result.error} Message START to try again.`;
   }
 
-  return result.response.message + '\n\nMessage us here anytime to check your status.';
+  const { decision, reference, message, quotation } = result.response;
+
+  if (decision === 'approved') {
+    const q = quotation;
+    const firstName = d.fullName.split(' ')[0];
+    const ceilingNote = q.aboveShortTermCreditCeiling
+      ? `\n\n⚠️ Above R${q.shortTermCreditCeiling} — needs compliance confirmation on applicable fee/interest caps before this quote is final.`
+      : '';
+    const body = `Good news, ${firstName}! Here's your quote for R${d.requestedAmount} over ${d.termMonths} months:\n\n` +
+      `• Interest: ${(q.monthlyInterestRate * 100).toFixed(1)}%/month\n` +
+      `• Initiation fee: R${q.initiationFee.toFixed(2)}\n` +
+      `• Monthly service fee: R${q.monthlyServiceFee.toFixed(2)}\n` +
+      `• Insurance: from R${q.schedule[0].insurancePremium.toFixed(2)}/month\n` +
+      `• First instalment: R${q.firstMonthInstalment.toFixed(2)}\n` +
+      `• Total repayable: R${q.totalRepayable.toFixed(2)}\n\n` +
+      `Reference ${reference}. We need 4 PDF documents before payout: ID, proof of address, 3 months' bank statements (or latest payslip), and proof of your bank account.${ceilingNote}\n\nOur team reviews within 1 business day. Message us here anytime to check your status.`;
+    return {
+      interactive: 'cta',
+      body,
+      buttonLabel: 'Upload documents',
+      url: `${getPublicAppUrl()}/upload.html?ref=${reference}`,
+    };
+  }
+
+  return message + '\n\nMessage us here anytime to check your status.';
 }
 
 module.exports = router;

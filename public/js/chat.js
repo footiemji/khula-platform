@@ -174,12 +174,29 @@
     }
   }
 
-  async function start() {
+  function showChatUI() {
+    document.getElementById('channelChoice').style.display = 'none';
+    document.getElementById('chatBody').style.display = 'block';
+    document.getElementById('chatInputRow').style.display = 'flex';
+    document.getElementById('restartBtn').style.display = 'inline-block';
+  }
+
+  // Decides upfront whether there's anything to resume, or whether to show
+  // the explicit "website or WhatsApp" choice. A saved in-progress
+  // application skips the choice screen entirely — that's clearly someone
+  // continuing, not picking a channel fresh.
+  async function init() {
     const savedReference = loadSavedReference();
     if (savedReference) {
+      showChatUI();
       const resumed = await tryResume(savedReference);
-      if (resumed) return;
+      if (!resumed) await start();
+      return;
     }
+    document.getElementById('channelChoice').style.display = 'block';
+  }
+
+  async function start() {
     await botSay(
       "Welcome to Khula Financial Services 🌱 Grow. Thrive. Rise.\n\nI can get you a loan decision in under 2 minutes — the same way this would work on WhatsApp. What's your full name?"
     );
@@ -561,6 +578,19 @@
 
   async function promptWhatsAppFirst() {
     const config = await getConfig();
+
+    // Once the Authentication template is configured, OTPs deliver
+    // reliably regardless of any existing WhatsApp conversation — the
+    // whole reason this detour exists (opening a 24-hour service window)
+    // no longer applies. Skipping it here is what actually fixes "should
+    // I stay on WhatsApp or go back", for the web channel at least: there's
+    // nothing to go do on WhatsApp anymore.
+    if (config.otpTemplateConfigured) {
+      state.step = 'requesting_otp';
+      await requestOtp();
+      return;
+    }
+
     const number = config.whatsappBusinessNumber;
 
     if (!number) {
@@ -683,6 +713,7 @@
     const ref = prompt('Enter your application reference (e.g. KHULA-ABC123XYZ):');
     if (!ref) return;
     const trimmed = ref.trim().toUpperCase();
+    showChatUI();
     addSystem(`Looking up ${trimmed}…`);
     try {
       const res = await fetch(`/api/applications/${trimmed}`);
@@ -706,5 +737,29 @@
     location.reload();
   });
 
-  start();
+  document.getElementById('chooseWebBtn').addEventListener('click', async () => {
+    showChatUI();
+    await start();
+  });
+
+  document.getElementById('chooseWhatsAppBtn').addEventListener('click', async () => {
+    const config = await getConfig();
+    document.getElementById('chooseWebBtn').style.display = 'none';
+    document.getElementById('chooseWhatsAppBtn').style.display = 'none';
+    if (config.whatsappBusinessNumber) {
+      document.getElementById('waTapLink').href = `https://wa.me/${config.whatsappBusinessNumber}?text=${encodeURIComponent('LOAN')}`;
+      document.getElementById('whatsappChoicePanel').style.display = 'block';
+    } else {
+      document.getElementById('whatsappNotConfigured').style.display = 'block';
+    }
+  });
+
+  document.getElementById('backToChoiceBtn').addEventListener('click', () => {
+    document.getElementById('whatsappChoicePanel').style.display = 'none';
+    document.getElementById('whatsappNotConfigured').style.display = 'none';
+    document.getElementById('chooseWebBtn').style.display = 'flex';
+    document.getElementById('chooseWhatsAppBtn').style.display = 'flex';
+  });
+
+  init();
 })();

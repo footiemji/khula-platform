@@ -511,4 +511,23 @@ router.post('/applications/:reference/legal/enforcement', requireAdmin, asyncHan
   res.json(updated);
 }));
 
+// GET /api/admin/whatsapp-status — a real diagnostic instead of guessing.
+// Shows which pieces are actually configured without exposing secret
+// values themselves. This exists because "the template is approved on
+// Meta's side" and "the code is actually using it" are two different
+// facts, and confusing them cost real debugging time — the template can
+// be perfectly approved while these env vars are simply never set.
+router.get('/whatsapp-status', requireAdmin, asyncHandler(async (req, res) => {
+  res.json({
+    accessTokenSet: Boolean(process.env.WHATSAPP_ACCESS_TOKEN),
+    phoneNumberIdSet: Boolean(process.env.WHATSAPP_PHONE_NUMBER_ID),
+    businessNumberSet: Boolean(process.env.WHATSAPP_BUSINESS_NUMBER),
+    verifyTokenSet: Boolean(process.env.WHATSAPP_VERIFY_TOKEN),
+    otpTemplateConfigured: Boolean(process.env.WHATSAPP_OTP_TEMPLATE_NAME),
+    otpTemplateName: process.env.WHATSAPP_OTP_TEMPLATE_NAME || null,
+    otpTemplateLang: process.env.WHATSAPP_OTP_TEMPLATE_LANG || null,
+    otpSendMode: process.env.WHATSAPP_OTP_TEMPLATE_NAME ? 'template (works anytime)' : 'plain text (requires an open 24-hour window)',
+  });
+}));
+
 module.exports = router;
