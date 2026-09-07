@@ -1,4 +1,8 @@
-// Sends payment reminders and post-payment thank-yous over WhatsApp.
+// Sends payment reminders and post-payment thank-yous over WhatsApp, and
+// logs every one to the application's notificationHistory — a customer's
+// full communication record lives in one place, whether the message was
+// automated or sent manually by an admin (see server/routes/admin.js's
+// notifications/send endpoint for the manual side).
 //
 // Cost note (read this before enabling in production): as of Meta's July
 // 2025 pricing change, a WhatsApp message the business sends FIRST — like
@@ -14,23 +18,33 @@
 
 const { sendWhatsAppMessage } = require('./whatsappSender');
 const { toWhatsAppFormat } = require('./phoneFormat');
+const { logNotification } = require('./notificationLog');
 
 function formatDate(iso) {
   return new Date(iso).toLocaleDateString('en-ZA', { day: 'numeric', month: 'long' });
 }
 
-async function sendUpcomingReminder(app, installment) {
+// Every send function below follows the same shape: build the message,
+// send it, log it, return { delivered, message }. Centralising the log
+// call here means every call site gets a complete history for free,
+// rather than every caller having to remember to log it separately.
+async function sendAndLog(app, type, message) {
   const phone = toWhatsAppFormat(app.phoneNumber);
+  const delivered = await sendWhatsAppMessage(phone, message);
+  await logNotification(app.reference, { type, message, sentBy: 'system', delivered });
+  return { delivered, message };
+}
+
+async function sendUpcomingReminder(app, installment) {
   const firstName = app.fullName.split(' ')[0];
   const message = `Hi ${firstName}, this is a reminder that your Khula instalment of R${installment.amount.toFixed(2)} is due on ${formatDate(installment.dueDate)}. Reference ${app.reference}. Make sure there are sufficient funds in your account for the DebiCheck collection. Reply here if you need help.`;
-  return sendWhatsAppMessage(phone, message);
+  return sendAndLog(app, 'upcoming_reminder', message);
 }
 
 async function sendOverdueNotice(app, installment) {
-  const phone = toWhatsAppFormat(app.phoneNumber);
   const firstName = app.fullName.split(' ')[0];
   const message = `Hi ${firstName}, we weren't able to collect your Khula instalment of R${installment.amount.toFixed(2)} due ${formatDate(installment.dueDate)}. Reference ${app.reference}. Please reply here to arrange payment — we'd rather help you catch up than let this become a bigger problem.`;
-  return sendWhatsAppMessage(phone, message);
+  return sendAndLog(app, 'overdue_notice', message);
 }
 
 // Sent periodically for an instalment that's STILL unpaid a while after the
@@ -42,19 +56,17 @@ async function sendOverdueNotice(app, installment) {
 // collectionsSweep.js) — beyond that point, further contact should come
 // through the human-driven legal escalation ladder, not an automated loop.
 async function sendRepeatOverdueReminder(app, installment) {
-  const phone = toWhatsAppFormat(app.phoneNumber);
   const firstName = app.fullName.split(' ')[0];
   const message = `Hi ${firstName}, just checking in — your Khula instalment of R${installment.amount.toFixed(2)} (reference ${app.reference}) is still outstanding. If you're going through a tough time, message us here and we can talk through options together. No judgment, just want to help you get back on track.`;
-  return sendWhatsAppMessage(phone, message);
+  return sendAndLog(app, 'repeat_overdue_reminder', message);
 }
 
 async function sendThankYou(app, installment, remaining) {
-  const phone = toWhatsAppFormat(app.phoneNumber);
   const firstName = app.fullName.split(' ')[0];
   const message = remaining > 0
     ? `Thanks ${firstName}! We've received your payment of R${installment.amount.toFixed(2)}. You have ${remaining} instalment${remaining === 1 ? '' : 's'} left on this loan. Reference ${app.reference}.`
     : `Thanks ${firstName}! That was your final instalment — this loan is now fully paid off. 🎉 Well done, and thanks for being a Khula customer. Reference ${app.reference}.`;
-  return sendWhatsAppMessage(phone, message);
+  return sendAndLog(app, 'thank_you', message);
 }
 
 // Sent once the DebiCheck mandate is confirmed and disbursement actually
@@ -62,10 +74,9 @@ async function sendThankYou(app, installment, remaining) {
 // agreement and the bank confirming the debit order mandate are two
 // separate things. See server/routes/admin.js mandate/confirm endpoint.
 async function sendDisbursementConfirmation(app) {
-  const phone = toWhatsAppFormat(app.phoneNumber);
   const firstName = app.fullName.split(' ')[0];
   const message = `Great news ${firstName} — your debit order mandate is confirmed, and R${app.requestedAmount} is on its way to your account now. Reference ${app.reference}. You can still cancel at no cost until your reconsideration window closes — just message us.`;
-  return sendWhatsAppMessage(phone, message);
+  return sendAndLog(app, 'disbursement_confirmation', message);
 }
 
 // Sent if the customer doesn't confirm the mandate at their bank (or
@@ -73,10 +84,9 @@ async function sendDisbursementConfirmation(app) {
 // resolved, so the borrower needs to know something is actually blocking
 // their payout, not just silence.
 async function sendMandateDeclinedNotice(app) {
-  const phone = toWhatsAppFormat(app.phoneNumber);
   const firstName = app.fullName.split(' ')[0];
   const message = `Hi ${firstName}, we weren't able to confirm your debit order mandate, so we haven't been able to release your funds yet. Reference ${app.reference}. Please message us here so we can sort this out together.`;
-  return sendWhatsAppMessage(phone, message);
+  return sendAndLog(app, 'mandate_declined', message);
 }
 
 // Sent when a loan is paid off via early settlement — deliberately
@@ -85,13 +95,12 @@ async function sendMandateDeclinedNotice(app) {
 // them money (the whole point of the NCA Section 125 right), not just a
 // generic "loan closed" notice.
 async function sendSettlementConfirmation(app, settlementAmount, overpayment) {
-  const phone = toWhatsAppFormat(app.phoneNumber);
   const firstName = app.fullName.split(' ')[0];
   const overpaymentNote = overpayment > 0
     ? ` You paid R${overpayment.toFixed(2)} more than the exact settlement figure — we'll be in touch about refunding that.`
     : '';
   const message = `Great news ${firstName} — your loan is now fully settled early, for R${settlementAmount.toFixed(2)}. Paying it off ahead of schedule means you didn't pay interest or fees for the months you no longer needed the loan.${overpaymentNote} Thanks for being a Khula customer. Reference ${app.reference}.`;
-  return sendWhatsAppMessage(phone, message);
+  return sendAndLog(app, 'settlement_confirmation', message);
 }
 
 module.exports = { sendUpcomingReminder, sendOverdueNotice, sendRepeatOverdueReminder, sendThankYou, sendDisbursementConfirmation, sendMandateDeclinedNotice, sendSettlementConfirmation };

@@ -87,6 +87,7 @@
           ${a.status === 'active' && a.collections?.debicheckStatus && !['not_started', 'mandate_sent'].includes(a.collections.debicheckStatus) ? `<span style="font-size:11.5px;color:var(--ink-soft);">DebiCheck: ${a.collections.debicheckStatus.replace(/_/g, ' ')}${a.disbursement?.status === 'disbursed' ? ' · Disbursed' : ''}</span>` : ''}
           ${['active', 'completed'].includes(a.status) && a.collections?.repaymentSchedule?.length ? `<button class="review-kyc" data-ref="${a.reference}" data-repayments="1">Repayments</button>` : ''}
           ${a.status === 'active' && (a.collections?.repaymentSchedule || []).some(i => i.status === 'overdue') ? `<button class="review-kyc" data-ref="${a.reference}" data-legal="1" style="border-color:var(--danger);color:var(--danger);">Legal</button>` : ''}
+          <button class="review-kyc" data-ref="${a.reference}" data-notify="1">Notify</button>
           ${!['manual_review'].includes(a.decision) && a.status !== 'pending_kyc' && !(a.status === 'active') ? '—' : ''}
         </td>
       </tr>
@@ -140,6 +141,10 @@
 
     document.querySelectorAll('.row-actions button[data-legal]').forEach((btn) => {
       btn.addEventListener('click', () => openLegalModal(btn.dataset.ref));
+    });
+
+    document.querySelectorAll('.row-actions button[data-notify]').forEach((btn) => {
+      btn.addEventListener('click', () => openNotifyModal(btn.dataset.ref));
     });
   }
 
@@ -615,6 +620,89 @@
       const res = await authedFetch(`/api/admin/applications/${app.reference}/legal/enforcement`, { method: 'POST', body: JSON.stringify({ mechanism }) });
       const updated = await res.json();
       if (res.ok) { renderLegalModal(updated); await refresh(); }
+    });
+  }
+
+  // ---------------- Notifications modal ----------------
+  async function openNotifyModal(reference) {
+    kycBody.innerHTML = '<p>Loading…</p>';
+    kycModal.style.display = 'flex';
+    try {
+      const res = await authedFetch(`/api/admin/applications`);
+      const apps = await res.json();
+      const app = apps.find((a) => a.reference === reference);
+      if (!app) { kycBody.innerHTML = '<p>Application not found.</p>'; return; }
+      renderNotifyModal(app);
+    } catch {
+      kycBody.innerHTML = '<p>Could not load application.</p>';
+    }
+  }
+
+  const NOTIFICATION_TYPE_LABELS = {
+    upcoming_reminder: 'Upcoming payment reminder',
+    overdue_notice: 'Overdue notice',
+    repeat_overdue_reminder: 'Follow-up overdue reminder',
+    thank_you: 'Payment received',
+    disbursement_confirmation: 'Funds disbursed',
+    mandate_declined: 'Mandate declined',
+    settlement_confirmation: 'Early settlement confirmed',
+    custom: 'Custom message',
+    balance_summary: 'Balance summary',
+  };
+
+  function renderNotifyModal(app) {
+    const history = [...(app.notificationHistory || [])].sort((a, b) => new Date(b.sentAt) - new Date(a.sentAt));
+
+    const historyRows = history.length
+      ? history.map((n) => `
+          <div class="kyc-doc-row" style="align-items:flex-start; flex-direction:column; gap:4px;">
+            <div style="display:flex; justify-content:space-between; width:100%;">
+              <strong style="font-size:12.5px;">${NOTIFICATION_TYPE_LABELS[n.type] || n.type}</strong>
+              <span style="font-size:11px; color:var(--ink-soft);">${new Date(n.sentAt).toLocaleString('en-ZA')} · ${n.sentBy === 'system' ? 'automated' : n.sentBy}${n.delivered === false ? ' · <span style="color:var(--danger);">failed</span>' : ''}</span>
+            </div>
+            <p style="font-size:12px; color:var(--ink-soft); white-space:pre-wrap; margin:0;">${n.message}</p>
+          </div>
+        `).join('')
+      : '<p style="color:var(--ink-soft); font-size:13px;">No notifications sent yet.</p>';
+
+    kycBody.innerHTML = `
+      <h3 class="display" style="margin-top:0;">${app.fullName} · ${app.reference}</h3>
+
+      <div class="kyc-quote-box" style="margin-bottom:8px;">
+        <strong>Send a custom message</strong>
+        <textarea id="customMessageInput" rows="3" style="width:100%; margin-top:6px; padding:8px; border-radius:6px; border:1px solid rgba(22,50,26,0.2); font-family:inherit; font-size:13px;" placeholder="Type anything — this goes straight to the customer on WhatsApp."></textarea>
+        <button class="btn-primary" id="sendCustomBtn" style="background:var(--forest); margin-top:6px; width:auto; padding:7px 16px;">Send</button>
+      </div>
+
+      ${app.status === 'active' ? `
+        <button class="btn-primary" id="sendBalanceSummaryBtn" style="background:var(--gold); color:var(--forest-deep); margin-bottom:14px;">Send balance summary</button>
+      ` : ''}
+
+      <h4 style="margin-bottom:8px;">Notification history</h4>
+      <div class="kyc-docs" style="max-height:280px; overflow-y:auto;">${historyRows}</div>
+
+      <button class="btn-primary" id="closeNotifyBtn" style="background:transparent;color:var(--ink);border:1px solid rgba(22,50,26,0.2); margin-top:14px;">Close</button>
+    `;
+
+    document.getElementById('closeNotifyBtn').addEventListener('click', () => { kycModal.style.display = 'none'; });
+
+    document.getElementById('sendCustomBtn').addEventListener('click', async () => {
+      const message = document.getElementById('customMessageInput').value.trim();
+      if (!message) { alert('Type a message first.'); return; }
+      const res = await authedFetch(`/api/admin/applications/${app.reference}/notifications/send`, { method: 'POST', body: JSON.stringify({ message }) });
+      const data = await res.json();
+      if (!res.ok) { alert(data.error); return; }
+      const refreshed = await (await authedFetch(`/api/admin/applications`)).json();
+      renderNotifyModal(refreshed.find((a) => a.reference === app.reference));
+    });
+
+    const balanceBtn = document.getElementById('sendBalanceSummaryBtn');
+    if (balanceBtn) balanceBtn.addEventListener('click', async () => {
+      const res = await authedFetch(`/api/admin/applications/${app.reference}/notifications/send-balance-summary`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) { alert(data.error); return; }
+      const refreshed = await (await authedFetch(`/api/admin/applications`)).json();
+      renderNotifyModal(refreshed.find((a) => a.reference === app.reference));
     });
   }
 

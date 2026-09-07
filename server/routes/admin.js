@@ -6,6 +6,9 @@ const { signToken, requireAdmin, checkPassword } = require('../lib/auth');
 const { readDocument } = require('../lib/documentStore');
 const { initiateMandate } = require('../lib/debicheck');
 const { sendThankYou, sendDisbursementConfirmation, sendMandateDeclinedNotice, sendSettlementConfirmation } = require('../lib/reminders');
+const { sendWhatsAppMessage } = require('../lib/whatsappSender');
+const { toWhatsAppFormat } = require('../lib/phoneFormat');
+const { logNotification } = require('../lib/notificationLog');
 const { calculateEarlySettlement } = require('../lib/earlySettlement');
 const { runCollectionsSweep } = require('../lib/collectionsSweep');
 const { parseSalaryDayOfMonth } = require('../lib/repaymentSchedule');
@@ -400,7 +403,60 @@ router.post('/applications/:reference/repayments/:installmentNumber/mark-paid', 
   res.json(updated);
 }));
 
-// GET /api/applications/:reference/settlement-figure — lets admin preview
+// POST /api/admin/applications/:reference/notifications/send  { message }
+// The "any custom message" control — admin can message a customer
+// directly for anything the automated triggers don't cover, without
+// needing a code change for every new situation that comes up.
+router.post('/applications/:reference/notifications/send', requireAdmin, asyncHandler(async (req, res) => {
+  const { message } = req.body || {};
+  if (!message || !message.trim()) return res.status(400).json({ error: 'A message is required.' });
+
+  const app = await db.find('applications', (a) => a.reference === req.params.reference);
+  if (!app) return res.status(404).json({ error: 'Application not found.' });
+
+  const delivered = await sendWhatsAppMessage(toWhatsAppFormat(app.phoneNumber), message.trim());
+  await logNotification(req.params.reference, { type: 'custom', message: message.trim(), sentBy: req.admin.email, delivered });
+
+  if (!delivered) return res.status(502).json({ error: 'Message could not be delivered — check server logs for the exact reason (expired token, customer not in test-recipient list, etc).' });
+  res.json({ ok: true, delivered: true });
+}));
+
+// POST /api/admin/applications/:reference/notifications/send-balance-summary
+// An on-demand account statement — outstanding balance, what's still
+// owed, next due date, and today's early-settlement figure — for a
+// customer who calls in asking "where do I stand," without admin having
+// to manually calculate any of it.
+router.post('/applications/:reference/notifications/send-balance-summary', requireAdmin, asyncHandler(async (req, res) => {
+  const app = await db.find('applications', (a) => a.reference === req.params.reference);
+  if (!app) return res.status(404).json({ error: 'Application not found.' });
+  if (app.status !== 'active') return res.status(400).json({ error: `Balance summaries are only meaningful for active loans (current status: ${app.status}).` });
+
+  const schedule = app.collections?.repaymentSchedule || [];
+  const unpaid = schedule.filter((i) => i.status !== 'paid');
+  const settlement = calculateEarlySettlement(app);
+  const firstName = app.fullName.split(' ')[0];
+
+  let message;
+  if (unpaid.length === 0) {
+    message = `Hi ${firstName}, your Khula loan (${app.reference}) is fully paid off. Nothing outstanding. 🎉`;
+  } else {
+    const next = unpaid[0];
+    const owedOnNext = Math.round((next.amount - (next.amountPaid || 0)) * 100) / 100;
+    message = `Hi ${firstName}, here's where your Khula loan (${app.reference}) stands:\n\n` +
+      `• Instalments remaining: ${unpaid.length} of ${schedule.length}\n` +
+      `• Next instalment: R${owedOnNext.toFixed(2)} due ${new Date(next.dueDate).toLocaleDateString('en-ZA')}\n` +
+      (settlement.settlementAmount != null ? `• To settle everything today instead: R${settlement.settlementAmount.toFixed(2)}\n` : '') +
+      `\nMessage us here anytime with questions.`;
+  }
+
+  const delivered = await sendWhatsAppMessage(toWhatsAppFormat(app.phoneNumber), message);
+  await logNotification(req.params.reference, { type: 'balance_summary', message, sentBy: req.admin.email, delivered });
+
+  if (!delivered) return res.status(502).json({ error: 'Message could not be delivered — check server logs for the exact reason.' });
+  res.json({ ok: true, delivered: true, message });
+}));
+
+// GET /api/admin/applications/:reference/settlement-figure — lets admin preview
 // the real early-settlement figure before a customer asks or a payment
 // comes in, without needing to actually record anything.
 router.get('/applications/:reference/settlement-figure', requireAdmin, asyncHandler(async (req, res) => {
