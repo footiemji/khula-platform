@@ -440,37 +440,72 @@
       const apps = await res.json();
       const app = apps.find((a) => a.reference === reference);
       if (!app) { kycBody.innerHTML = '<p>Application not found.</p>'; return; }
-      renderRepaymentsModal(app);
+      await renderRepaymentsModal(app);
     } catch {
       kycBody.innerHTML = '<p>Could not load application.</p>';
     }
   }
 
-  const STATUS_LABELS = { due: 'Due', reminder_sent: 'Reminder sent', overdue: 'Overdue', paid: 'Paid' };
+  const STATUS_LABELS = { due: 'Due', reminder_sent: 'Reminder sent', overdue: 'Overdue', paid: 'Paid', partial: 'Partial' };
 
-  function renderRepaymentsModal(app) {
+  async function renderRepaymentsModal(app) {
     const schedule = app.collections?.repaymentSchedule || [];
     const rows = schedule.map((i) => `
       <div class="kyc-doc-row">
-        <span>Instalment ${i.installmentNumber} — R${i.amount.toFixed(2)} due ${new Date(i.dueDate).toLocaleDateString('en-ZA')}</span>
+        <span>Instalment ${i.installmentNumber} — R${i.amount.toFixed(2)} due ${new Date(i.dueDate).toLocaleDateString('en-ZA')}${i.status === 'partial' ? ` <span style="color:var(--ink-soft);font-size:11px;">(R${(i.amountPaid || 0).toFixed(2)} paid so far)</span>` : ''}</span>
         <span style="display:flex; align-items:center; gap:8px;">
           <span class="pill ${i.status === 'paid' ? 'active' : i.status === 'overdue' ? 'declined' : 'pending_kyc'}">${STATUS_LABELS[i.status] || i.status}</span>
-          ${i.status !== 'paid' ? `<button class="mark-paid" data-ref="${app.reference}" data-num="${i.installmentNumber}" style="border:1px solid var(--forest);color:var(--forest);background:var(--white);border-radius:8px;padding:4px 10px;font-size:11.5px;cursor:pointer;">Mark paid</button>` : ''}
+          ${i.status !== 'paid' ? `<button class="mark-paid" data-ref="${app.reference}" data-num="${i.installmentNumber}" style="border:1px solid var(--forest);color:var(--forest);background:var(--white);border-radius:8px;padding:4px 10px;font-size:11.5px;cursor:pointer;">Mark paid in full</button>` : ''}
         </span>
       </div>
     `).join('');
 
+    let settlementLine = '';
+    if (app.status === 'active') {
+      try {
+        const res = await authedFetch(`/api/admin/applications/${app.reference}/settlement-figure`);
+        const s = await res.json();
+        if (res.ok && !s.alreadyFullySettled) {
+          settlementLine = `<p style="font-size:12.5px; color:var(--ink-soft); margin-top:-6px;">Early settlement figure as of today: <strong style="color:var(--forest);">R${s.settlementAmount.toFixed(2)}</strong></p>`;
+        }
+      } catch {}
+    }
+
     kycBody.innerHTML = `
       <h3 class="display" style="margin-top:0;">${app.fullName} · ${app.reference}</h3>
       <p style="color:var(--ink-soft);font-size:13px;">Repayment schedule — ${schedule.filter(i=>i.status==='paid').length} of ${schedule.length} paid</p>
+      ${settlementLine}
+      ${app.status === 'active' ? `
+        <div class="kyc-quote-box" style="margin-bottom:12px;">
+          <strong>Record a payment</strong>
+          <div style="display:flex; gap:8px; margin-top:6px;">
+            <input type="number" id="paymentAmountInput" placeholder="Amount received (R)" style="flex:1; padding:6px; border-radius:6px; border:1px solid rgba(22,50,26,0.2);" />
+            <button class="btn-primary" id="recordPaymentBtn" style="background:var(--forest); width:auto; padding:6px 14px;">Record</button>
+          </div>
+          <p style="font-size:11px; color:var(--ink-soft); margin-top:6px;">Handles partial payments, overpayment, and full early settlement automatically — allocates oldest instalment first, or settles the loan if the amount covers today's settlement figure.</p>
+        </div>
+      ` : ''}
       <div class="kyc-docs">${rows}</div>
       <button class="btn-primary" id="closeRepaymentsBtn" style="background:transparent;color:var(--ink);border:1px solid rgba(22,50,26,0.2); margin-top:14px;">Close</button>
     `;
 
     document.getElementById('closeRepaymentsBtn').addEventListener('click', () => { kycModal.style.display = 'none'; });
+
+    const recordBtn = document.getElementById('recordPaymentBtn');
+    if (recordBtn) recordBtn.addEventListener('click', async () => {
+      const amount = Number(document.getElementById('paymentAmountInput').value);
+      if (!amount || amount <= 0) { alert('Enter a valid amount.'); return; }
+      const res = await authedFetch(`/api/admin/applications/${app.reference}/record-payment`, { method: 'POST', body: JSON.stringify({ amount }) });
+      const updated = await res.json();
+      if (!res.ok) { alert(updated.error); return; }
+      if (updated.status === 'completed') alert('Loan fully settled — customer notified.');
+      await renderRepaymentsModal(updated);
+      await refresh();
+    });
+
     kycBody.querySelectorAll('.mark-paid').forEach((btn) => {
       btn.addEventListener('click', async () => {
-        if (!confirm(`Mark instalment ${btn.dataset.num} as paid? This sends a thank-you message to the customer.`)) return;
+        if (!confirm(`Mark instalment ${btn.dataset.num} as fully paid? This sends a thank-you message to the customer.`)) return;
         const res = await authedFetch(`/api/admin/applications/${btn.dataset.ref}/repayments/${btn.dataset.num}/mark-paid`, { method: 'POST' });
         const updated = await res.json();
         if (res.ok) { renderRepaymentsModal(updated); await refresh(); }

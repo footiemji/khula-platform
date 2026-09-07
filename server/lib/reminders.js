@@ -79,4 +79,19 @@ async function sendMandateDeclinedNotice(app) {
   return sendWhatsAppMessage(phone, message);
 }
 
-module.exports = { sendUpcomingReminder, sendOverdueNotice, sendRepeatOverdueReminder, sendThankYou, sendDisbursementConfirmation, sendMandateDeclinedNotice };
+// Sent when a loan is paid off via early settlement — deliberately
+// distinct from the normal final-instalment thank-you, since it's worth
+// being transparent with the customer that paying early genuinely saved
+// them money (the whole point of the NCA Section 125 right), not just a
+// generic "loan closed" notice.
+async function sendSettlementConfirmation(app, settlementAmount, overpayment) {
+  const phone = toWhatsAppFormat(app.phoneNumber);
+  const firstName = app.fullName.split(' ')[0];
+  const overpaymentNote = overpayment > 0
+    ? ` You paid R${overpayment.toFixed(2)} more than the exact settlement figure — we'll be in touch about refunding that.`
+    : '';
+  const message = `Great news ${firstName} — your loan is now fully settled early, for R${settlementAmount.toFixed(2)}. Paying it off ahead of schedule means you didn't pay interest or fees for the months you no longer needed the loan.${overpaymentNote} Thanks for being a Khula customer. Reference ${app.reference}.`;
+  return sendWhatsAppMessage(phone, message);
+}
+
+module.exports = { sendUpcomingReminder, sendOverdueNotice, sendRepeatOverdueReminder, sendThankYou, sendDisbursementConfirmation, sendMandateDeclinedNotice, sendSettlementConfirmation };

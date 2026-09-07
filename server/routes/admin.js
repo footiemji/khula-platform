@@ -5,7 +5,8 @@ const db = require('../lib/db');
 const { signToken, requireAdmin, checkPassword } = require('../lib/auth');
 const { readDocument } = require('../lib/documentStore');
 const { initiateMandate } = require('../lib/debicheck');
-const { sendThankYou, sendDisbursementConfirmation, sendMandateDeclinedNotice } = require('../lib/reminders');
+const { sendThankYou, sendDisbursementConfirmation, sendMandateDeclinedNotice, sendSettlementConfirmation } = require('../lib/reminders');
+const { calculateEarlySettlement } = require('../lib/earlySettlement');
 const { runCollectionsSweep } = require('../lib/collectionsSweep');
 const { parseSalaryDayOfMonth } = require('../lib/repaymentSchedule');
 const asyncHandler = require('../lib/asyncHandler');
@@ -397,6 +398,104 @@ router.post('/applications/:reference/repayments/:installmentNumber/mark-paid', 
   sendThankYou(updated, installment, remaining).catch((e) => console.error('Failed to send thank-you message:', e.message));
 
   res.json(updated);
+}));
+
+// GET /api/applications/:reference/settlement-figure — lets admin preview
+// the real early-settlement figure before a customer asks or a payment
+// comes in, without needing to actually record anything.
+router.get('/applications/:reference/settlement-figure', requireAdmin, asyncHandler(async (req, res) => {
+  const app = await db.find('applications', (a) => a.reference === req.params.reference);
+  if (!app) return res.status(404).json({ error: 'Application not found.' });
+  const settlement = calculateEarlySettlement(app);
+  if (settlement.settlementAmount === null) return res.status(400).json({ error: settlement.error });
+  res.json(settlement);
+}));
+
+// POST /api/applications/:reference/record-payment  { amount, paidAt?, note? }
+// This is the real reconciliation path — handles overpayment, underpayment,
+// partial instalments, and full early settlement, none of which the
+// single-instalment "mark paid" above can express. Checks against the
+// actual NCA Section 125 early-settlement figure FIRST (server/lib/
+// earlySettlement.js), so someone paying enough to close the loan out
+// early is never overcharged interest for months that never happened —
+// then falls back to oldest-instalment-first allocation for anything
+// short of a full settlement.
+router.post('/applications/:reference/record-payment', requireAdmin, asyncHandler(async (req, res) => {
+  const { amount, paidAt, note } = req.body || {};
+  const paymentAmount = Number(amount);
+  if (!paymentAmount || paymentAmount <= 0) return res.status(400).json({ error: 'A positive payment amount is required.' });
+
+  const app = await db.find('applications', (a) => a.reference === req.params.reference);
+  if (!app) return res.status(404).json({ error: 'Application not found.' });
+  if (app.status !== 'active') return res.status(400).json({ error: `Can only record payments against an active loan (current status: ${app.status}).` });
+
+  const effectiveDate = paidAt ? new Date(paidAt) : new Date();
+  const settlement = calculateEarlySettlement(app, effectiveDate);
+  if (settlement.settlementAmount === null) return res.status(400).json({ error: settlement.error });
+
+  const schedule = [...(app.collections?.repaymentSchedule || [])].sort((a, b) => a.installmentNumber - b.installmentNumber);
+  const paymentRecord = { amount: paymentAmount, paidAt: effectiveDate.toISOString(), recordedBy: req.admin.email, note: note || null };
+
+  // ---- Full early settlement: payment covers (or exceeds) the real
+  // settlement figure, not just the sum of scheduled instalments ----
+  if (!settlement.alreadyFullySettled && paymentAmount >= settlement.settlementAmount) {
+    const overpayment = Math.round((paymentAmount - settlement.settlementAmount) * 100) / 100;
+    const updatedSchedule = schedule.map((i) => (i.status === 'paid' ? i : { ...i, status: 'paid', paidAt: effectiveDate.toISOString(), markedPaidBy: req.admin.email, settledEarly: true }));
+
+    const updated = await db.update('applications', (a) => a.reference === req.params.reference, (a) => ({
+      ...a,
+      status: 'completed',
+      collections: { ...a.collections, repaymentSchedule: updatedSchedule },
+      paymentHistory: [...(a.paymentHistory || []), { ...paymentRecord, type: 'early_settlement', settlementAmount: settlement.settlementAmount, overpayment }],
+      refundOwed: overpayment > 0 ? (a.refundOwed || 0) + overpayment : a.refundOwed || 0,
+      adminNotes: [...(a.adminNotes || []), {
+        note: `Early settlement recorded: R${paymentAmount.toFixed(2)} received against a settlement figure of R${settlement.settlementAmount.toFixed(2)}.${overpayment > 0 ? ` R${overpayment.toFixed(2)} overpaid — owed back to customer.` : ''}`,
+        at: new Date().toISOString(),
+        by: req.admin.email,
+      }],
+    }));
+
+    sendSettlementConfirmation(updated, settlement.settlementAmount, overpayment).catch((e) => console.error('Failed to send settlement confirmation:', e.message));
+    return res.json({ ...updated, settlementCalculation: settlement });
+  }
+
+  // ---- Not a full settlement — allocate oldest-instalment-first ----
+  let remainingPayment = paymentAmount;
+  const updatedSchedule = schedule.map((installment) => {
+    if (remainingPayment <= 0 || installment.status === 'paid') return installment;
+
+    const alreadyPaidOnThis = installment.amountPaid || 0;
+    const stillOwedOnThis = Math.round((installment.amount - alreadyPaidOnThis) * 100) / 100;
+    const applied = Math.min(remainingPayment, stillOwedOnThis);
+    remainingPayment = Math.round((remainingPayment - applied) * 100) / 100;
+    const newAmountPaid = Math.round((alreadyPaidOnThis + applied) * 100) / 100;
+
+    if (newAmountPaid >= installment.amount) {
+      return { ...installment, status: 'paid', amountPaid: installment.amount, paidAt: effectiveDate.toISOString(), markedPaidBy: req.admin.email };
+    }
+    return { ...installment, status: 'partial', amountPaid: newAmountPaid };
+  });
+
+  const allPaid = updatedSchedule.every((i) => i.status === 'paid');
+  const leftoverUnallocated = remainingPayment; // shouldn't normally happen since we checked against settlement above, but guards against rounding
+
+  const updated = await db.update('applications', (a) => a.reference === req.params.reference, (a) => ({
+    ...a,
+    status: allPaid ? 'completed' : a.status,
+    collections: { ...a.collections, repaymentSchedule: updatedSchedule },
+    paymentHistory: [...(a.paymentHistory || []), { ...paymentRecord, type: 'instalment_allocation' }],
+    refundOwed: leftoverUnallocated > 0 ? (a.refundOwed || 0) + leftoverUnallocated : a.refundOwed || 0,
+    adminNotes: [...(a.adminNotes || []), {
+      note: `Payment of R${paymentAmount.toFixed(2)} recorded and allocated oldest-instalment-first.${allPaid ? ' Loan fully repaid.' : ''}`,
+      at: new Date().toISOString(),
+      by: req.admin.email,
+    }],
+  }));
+
+  const remainingCount = updatedSchedule.filter((i) => i.status !== 'paid').length;
+  sendThankYou(updated, { amount: paymentAmount }, remainingCount).catch((e) => console.error('Failed to send thank-you message:', e.message));
+
+  res.json({ ...updated, settlementCalculation: settlement });
 }));
 
 // POST /api/admin/collections/run-sweep — manually trigger the reminder/
