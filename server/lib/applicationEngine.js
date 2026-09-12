@@ -60,21 +60,16 @@ function namesLooselyMatch(a, b) {
 function messageForDecision(decisionType, record, baseUrl) {
   const base = baseUrl ? normalizeUrl(baseUrl) : getPublicAppUrl();
   switch (decisionType) {
-    case 'approved': {
-      const q = record.affordability.quotation;
-      const ceilingNote = q.aboveShortTermCreditCeiling
-        ? `\n\n⚠️ This amount is above R${q.shortTermCreditCeiling}, so it falls outside the standard short-term credit fee/interest caps — have this quote confirmed by compliance before it's relied on.`
-        : '';
-      return `Good news, ${record.fullName.split(' ')[0]}! Here's your quote for R${record.requestedAmount} over ${record.termMonths} months:\n\n` +
-        `• Interest: ${(q.monthlyInterestRate * 100).toFixed(1)}%/month\n` +
-        `• Initiation fee (once-off): R${q.initiationFee.toFixed(2)}\n` +
-        `• Monthly service fee: R${q.monthlyServiceFee.toFixed(2)}\n` +
-        `• Credit life insurance: from R${q.schedule[0].insurancePremium.toFixed(2)}/month (declines as you repay)\n` +
-        `• First month's total instalment: R${q.firstMonthInstalment.toFixed(2)}\n` +
-        `• Total cost of credit: R${q.totalCostOfCredit.toFixed(2)}\n` +
-        `• Total you'll repay: R${q.totalRepayable.toFixed(2)}\n\n` +
-        `Reference ${record.reference}.${ceilingNote}\n\nBefore we can pay out, we need 4 things: a copy of your ID, proof of address, 3 months' bank statements (or latest payslip), and proof of your bank account (for payout — must be in your name). Upload them here: ${base}/upload.html?ref=${record.reference}\n\nOur team reviews within 1 business day — you'll be notified here once you're cleared to sign.`;
-    }
+    case 'approved':
+      // Deliberately neutral — no quote, no "congratulations," nothing
+      // that could read as approval. Passing the initial affordability
+      // check is necessary but not sufficient: identity, address,
+      // employment, and the credit bureau still have to check out. The
+      // quote only appears once ALL of that clears (see
+      // server/routes/admin.js kyc-decision's 'verify' branch) — showing
+      // it here, before KYC even starts, is exactly the "you thought you
+      // were approved" problem this was built to fix.
+      return `Thanks ${record.fullName.split(' ')[0]}! To continue, we need 4 things: a copy of your ID, proof of address, 3 months' bank statements (or latest payslip), and proof of your bank account. Upload them here: ${base}/upload.html?ref=${record.reference}\n\nOur team reviews within 1 business day — you'll be notified here once review is complete.`;
     case 'manual_review':
       return `Thanks ${record.fullName.split(' ')[0]}. Your application (${record.reference}) needs a quick human review — we'll be in touch on WhatsApp within 1 business day.`;
     case 'declined':
@@ -98,6 +93,15 @@ function messageForDecision(decisionType, record, baseUrl) {
  * @param {object} [options.agentContext] - { agentId, agentCode, agentName, shopName } when channel is 'agent_assisted'
  */
 async function createApplication(input, options = {}) {
+  // Final safety net, checked regardless of channel or how far a UI-level
+  // check upstream may have been bypassed (a stale page, a direct API
+  // call, etc). The real point of blocking here — not just in each
+  // channel's own UI — is that this is the one place every application,
+  // from any channel, actually has to pass through.
+  if (process.env.APPLICATIONS_PAUSED === 'true') {
+    return { ok: false, status: 503, error: "We're not accepting new applications right now — check back soon. Message us here if you'd like to be notified when we reopen." };
+  }
+
   const { channel = 'web', baseUrl, agentContext = null } = options;
   const {
     fullName,
@@ -179,7 +183,7 @@ async function createApplication(input, options = {}) {
   // These are bright-line disqualifiers, checked BEFORE affordability —
   // there's no path to approval regardless of how affordable the loan
   // looks if one of these fires.
-  const gateResult = await checkHardGates({ idNumber: idClean, underDebtReview, isUnrehabilitatedInsolvent });
+  const gateResult = await checkHardGates({ idNumber: idClean, phoneNumber, underDebtReview, isUnrehabilitatedInsolvent });
   if (gateResult.blocked) {
     return { ok: false, status: 400, error: gateResult.reasons.join(' ') };
   }

@@ -107,8 +107,8 @@
       <textarea id="f_existingDebts" rows="2" placeholder="Capfin, personal loan, 5000, 800"></textarea>
     </div>
 
-    <div class="field"><label>Loan amount requested (R)</label><input id="f_requestedAmount" type="number" /></div>
-    <div class="field"><label>Term (months)</label><input id="f_termMonths" type="number" value="6" /></div>
+    <div class="field"><label>Loan amount requested (R)</label><input id="f_requestedAmount" type="number" min="500" max="1000" /></div>
+    <div class="field"><label>Term</label><input id="f_termMonths" type="text" value="1 month — due at month-end (salary advance)" disabled style="background:#f0f0f0;" /></div>
     <div class="field"><label>Purpose of loan</label><input id="f_loanPurpose" type="text" placeholder="e.g. emergency, school fees" /></div>
 
     <h3 class="display" style="margin-bottom:8px;">Payout bank account (must be customer's own)</h3>

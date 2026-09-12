@@ -5,12 +5,14 @@ const db = require('../lib/db');
 const { signToken, requireAdmin, checkPassword } = require('../lib/auth');
 const { readDocument } = require('../lib/documentStore');
 const { initiateMandate } = require('../lib/debicheck');
-const { sendThankYou, sendDisbursementConfirmation, sendMandateDeclinedNotice, sendSettlementConfirmation } = require('../lib/reminders');
+const { sendThankYou, sendDisbursementConfirmation, sendMandateDeclinedNotice, sendSettlementConfirmation, sendApprovalQuoteReveal } = require('../lib/reminders');
+const { getPublicAppUrl } = require('../lib/applicationEngine');
 const { sendWhatsAppMessage } = require('../lib/whatsappSender');
 const { toWhatsAppFormat } = require('../lib/phoneFormat');
 const { logNotification } = require('../lib/notificationLog');
 const { calculateEarlySettlement } = require('../lib/earlySettlement');
 const { runCollectionsSweep } = require('../lib/collectionsSweep');
+const { runApplicationExpirySweep } = require('../lib/applicationExpiry');
 const { parseSalaryDayOfMonth } = require('../lib/repaymentSchedule');
 const asyncHandler = require('../lib/asyncHandler');
 
@@ -105,17 +107,39 @@ router.post('/applications/:reference/decision', requireAdmin, asyncHandler(asyn
   if (!['approved', 'declined'].includes(decision)) {
     return res.status(400).json({ error: 'decision must be "approved" or "declined".' });
   }
+
+  const app = await db.find('applications', (a) => a.reference === req.params.reference);
+  if (!app) return res.status(404).json({ error: 'Application not found.' });
+
+  // "Approve" here means "I've reviewed the risk factors and I'm
+  // comfortable inviting this person to proceed" — it does NOT mean
+  // signature-ready. This used to jump straight to 'awaiting_signature',
+  // skipping document collection AND the bureau check entirely — a
+  // bigger gap than the premature-quote issue, since it meant a
+  // manual-review case could reach signing with literally nothing
+  // verified. It now goes through the exact same pending_kyc pipeline as
+  // every other application.
   const updated = await db.update(
     'applications',
     (a) => a.reference === req.params.reference,
     (a) => ({
       ...a,
       decision,
-      status: decision === 'approved' ? 'awaiting_signature' : 'declined',
+      status: decision === 'approved' ? 'pending_kyc' : 'declined',
+      kyc: decision === 'approved' ? { ...a.kyc, status: 'awaiting_documents' } : a.kyc,
       adminNotes: [...(a.adminNotes || []), { note: note || `Manually ${decision} by admin`, at: new Date().toISOString(), by: req.admin.email }],
     })
   );
   if (!updated) return res.status(404).json({ error: 'Application not found.' });
+
+  if (decision === 'approved') {
+    const base = getPublicAppUrl();
+    const message = `Thanks ${updated.fullName.split(' ')[0]}! To continue, we need 4 things: a copy of your ID, proof of address, 3 months' bank statements (or latest payslip), and proof of your bank account. Upload them here: ${base}/upload.html?ref=${updated.reference}\n\nOur team reviews within 1 business day — you'll be notified here once review is complete.`;
+    sendWhatsAppMessage(toWhatsAppFormat(updated.phoneNumber), message).then((delivered) =>
+      logNotification(updated.reference, { type: 'documents_requested', message, sentBy: req.admin.email, delivered })
+    ).catch((e) => console.error('Failed to send documents-requested message:', e.message));
+  }
+
   res.json(updated);
 }));
 
@@ -195,6 +219,13 @@ router.post('/applications/:reference/kyc-decision', requireAdmin, asyncHandler(
         auditLog: [...(a.kyc.auditLog || []), { action: 'verified', by: req.admin.email, at: new Date().toISOString(), note: note || null }],
       },
     }));
+
+    // The customer sees a real quote and the word "approved" for the
+    // first time right here — not at application-creation, not before
+    // documents were even collected. This is the actual fix for "you get
+    // congratulations before you've even uploaded documents."
+    sendApprovalQuoteReveal(updated).catch((e) => console.error('Failed to send approval quote reveal:', e.message));
+
     return res.json(updated);
   }
 
@@ -562,6 +593,14 @@ router.post('/collections/run-sweep', requireAdmin, asyncHandler(async (req, res
   res.json(results);
 }));
 
+// POST /api/admin/applications/run-expiry-sweep — same on-demand pattern
+// as the collections sweep above, for the 24-hour application expiry
+// (server/lib/applicationExpiry.js).
+router.post('/applications/run-expiry-sweep', requireAdmin, asyncHandler(async (req, res) => {
+  const results = await runApplicationExpirySweep();
+  res.json(results);
+}));
+
 // ---------------- Legal / collections escalation ----------------
 // Tracks the ladder from soft collections through to enforcement. Every
 // step here is a manual admin action, deliberately — actual legal
@@ -673,7 +712,6 @@ router.post('/applications/:reference/legal/enforcement', requireAdmin, asyncHan
 // facts, and confusing them cost real debugging time — the template can
 // be perfectly approved while these env vars are simply never set.
 router.get('/whatsapp-status', requireAdmin, asyncHandler(async (req, res) => {
-  const { getPublicAppUrl } = require('../lib/applicationEngine');
   const publicUrl = getPublicAppUrl();
   res.json({
     accessTokenSet: Boolean(process.env.WHATSAPP_ACCESS_TOKEN),

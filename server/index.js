@@ -73,6 +73,16 @@ setInterval(() => {
   runCollectionsSweep().catch((err) => console.error('Collections sweep failed:', err.message));
 }, SWEEP_INTERVAL_MS);
 
+// Application expiry sweep — clears out unresolved applications after 24
+// hours (see server/lib/applicationExpiry.js). Runs more frequently than
+// the collections sweep since a 24-hour expiry window needs finer-grained
+// checking than a 6-hour one would allow.
+const { runApplicationExpirySweep } = require('./lib/applicationExpiry');
+const EXPIRY_SWEEP_INTERVAL_MS = Number(process.env.EXPIRY_SWEEP_INTERVAL_MS || 60 * 60 * 1000); // default every hour
+setInterval(() => {
+  runApplicationExpirySweep().catch((err) => console.error('Application expiry sweep failed:', err.message));
+}, EXPIRY_SWEEP_INTERVAL_MS);
+
 app.get('/api/health', (req, res) => res.json({ status: 'ok', service: 'khula-financial-services', time: new Date().toISOString() }));
 
 // Non-sensitive config the frontend needs — e.g. the real WhatsApp number
@@ -80,6 +90,7 @@ app.get('/api/health', (req, res) => res.json({ status: 'ok', service: 'khula-fi
 app.get('/api/config', (req, res) => res.json({
   whatsappBusinessNumber: process.env.WHATSAPP_BUSINESS_NUMBER || null,
   otpTemplateConfigured: Boolean(process.env.WHATSAPP_OTP_TEMPLATE_NAME),
+  applicationsPaused: process.env.APPLICATIONS_PAUSED === 'true',
 }));
 
 // GET /api/whatsapp-qr.png — a scannable QR code for the WhatsApp entry

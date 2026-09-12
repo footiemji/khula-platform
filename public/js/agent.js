@@ -52,7 +52,7 @@
   const FORM_FIELDS = [
     'f_fullName', 'f_idNumber', 'f_phoneNumber', 'f_employmentType', 'f_employerName', 'f_employerPhone',
     'f_monthsEmployed', 'f_salaryPaymentDate', 'f_netMonthlyIncome', 'f_averageCommission3mo', 'f_monthlyExpenses',
-    'f_existingDebts', 'f_requestedAmount', 'f_termMonths', 'f_loanPurpose',
+    'f_existingDebts', 'f_requestedAmount', 'f_loanPurpose',
     'f_bankAccountHolder', 'f_bankName', 'f_accountNumber', 'f_branchCode',
   ];
   const CHECKBOX_FIELDS = ['f_consent', 'f_underDebtReview', 'f_creditBureauConsent', 'f_declarationsAccepted', 'f_customerPresent'];
@@ -116,7 +116,6 @@
   function resetForm() {
     FORM_FIELDS.forEach((id) => { document.getElementById(id).value = ''; });
     CHECKBOX_FIELDS.forEach((id) => { document.getElementById(id).checked = false; });
-    document.getElementById('f_termMonths').value = '6';
     document.getElementById('f_averageCommission3mo').value = '0';
     document.getElementById('f_employmentType').value = 'formal_permanent';
     document.getElementById('f_maritalStatus').value = 'single';
@@ -241,7 +240,7 @@
       monthlyExpenses: Number(document.getElementById('f_monthlyExpenses').value),
       existingDebts,
       requestedAmount: Number(document.getElementById('f_requestedAmount').value),
-      termMonths: Number(document.getElementById('f_termMonths').value),
+      termMonths: 1, // salary advance — always a single instalment due at month-end
       loanPurpose: document.getElementById('f_loanPurpose').value.trim() || null,
       bankAccountHolder: document.getElementById('f_bankAccountHolder').value.trim(),
       bankName: document.getElementById('f_bankName').value.trim(),

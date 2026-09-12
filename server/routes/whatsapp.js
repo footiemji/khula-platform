@@ -95,6 +95,29 @@ router.post('/webhook', async (req, res) => {
   runSerialized(from, async () => {
     const { session, isNew } = await getOrCreateSession(from);
 
+    // A brand-new conversation during a pause gets told plainly, not left
+    // to fill out a whole application before finding out at the end.
+    // Existing conversations, AND anyone with an existing application
+    // under this phone number even if this is their first WhatsApp
+    // message about it (e.g. they applied via web, never messaged
+    // WhatsApp before) are untouched — the pause is about blocking NEW
+    // intake, not blocking people who already have something in progress.
+    if (isNew) {
+      const hasExistingApplication = await db.find('applications', (a) => a.phoneNumber === from);
+      if (hasExistingApplication) {
+        // Route straight to their real status, same as the 'done' case
+        // does — a brand-new session shouldn't mean a brand-new person if
+        // they already have an application under this number.
+        const reply = await checkExistingOrOfferFresh(session);
+        await sendReply(from, reply);
+        return;
+      }
+      if (process.env.APPLICATIONS_PAUSED === 'true') {
+        await sendWhatsAppMessage(from, "We're not accepting new applications right now — check back soon. Reply here anytime and we'll let you know when we reopen.");
+        return;
+      }
+    }
+
     // Two independent safety nets against a stale, abandoned conversation
     // permanently intercepting every future message from that number —
     // this is exactly what happened when a session stuck mid-application
@@ -418,25 +441,13 @@ async function advanceConversation(session, text) {
 
     case 'ask_amount': {
       const amount = Number(text.replace(/[^\d.]/g, ''));
-      if (!amount) return 'Please send just the number, e.g. 3000';
+      if (!amount) return 'Please send just the number, e.g. 800';
+      // Salary advance — always due at month-end, no term to choose.
       session.data.requestedAmount = amount;
-      session.step = 'ask_term';
-      await saveSession(session);
-      return {
-        interactive: 'buttons',
-        body: `Over how many months would you like to repay? Pick a common option, or just type a number (1-${process.env.MAX_TERM_MONTHS || 60}).`,
-        options: [{ id: '3', title: '3 months' }, { id: '6', title: '6 months' }, { id: '12', title: '12 months' }],
-      };
-    }
-
-    case 'ask_term': {
-      const term = Number(text.replace(/[^\d.]/g, ''));
-      const maxTerm = Number(process.env.MAX_TERM_MONTHS || 60);
-      if (!term || term < 1 || term > maxTerm) return `Please reply with a number of months between 1 and ${maxTerm}, or tap one of the options above.`;
-      session.data.termMonths = term;
+      session.data.termMonths = 1;
       session.step = 'ask_purpose';
       await saveSession(session);
-      return "What's the loan for? (e.g. emergency, school fees, medical, home repairs)";
+      return "What's the advance for? (e.g. emergency, school fees, medical, groceries)";
     }
 
     case 'ask_purpose':
@@ -654,35 +665,21 @@ async function finalizeApplication(session) {
   const { decision, reference, message, quotation } = result.response;
 
   if (decision === 'approved') {
-    const q = quotation;
-    const firstName = d.fullName.split(' ')[0];
-    const ceilingNote = q.aboveShortTermCreditCeiling
-      ? ` ⚠️ Above R${q.shortTermCreditCeiling} — needs compliance confirmation on applicable fee/interest caps before this quote is final.`
-      : '';
     const base = getPublicAppUrl();
-
-    // Short summary first, then the actual formatted PDF (same document
-    // the web flow shows via "View pre-agreement statement"), then the
-    // upload action — three focused messages instead of one long wall of
-    // text trying to do everything at once.
-    await sendWhatsAppMessage(
-      session.phone,
-      `Good news, ${firstName}! You're approved for R${d.requestedAmount} over ${d.termMonths} months — first instalment R${q.firstMonthInstalment.toFixed(2)}, total repayable R${q.totalRepayable.toFixed(2)}. Full breakdown in the PDF below.${ceilingNote}`
-    );
-    await sendWhatsAppDocument(
-      session.phone,
-      `${base}/api/applications/${reference}/pre-agreement.pdf`,
-      `Khula-Pre-Agreement-${reference}.pdf`,
-      'Your quote and pre-agreement statement'
-    );
-
+    // Deliberately neutral — no quote, no "you're approved" — see
+    // server/lib/applicationEngine.js's messageForDecision for why: KYC,
+    // employment/address verification, and the credit bureau check still
+    // have to clear before anything is actually promised. The quote and
+    // PDF only get sent once admin verifies KYC (server/routes/admin.js
+    // kyc-decision's 'verify' branch calls sendApprovalQuoteReveal).
     return {
       interactive: 'cta',
-      body: `Reference ${reference}. We need 4 PDF documents before payout: ID, proof of address, 3 months' bank statements (or latest payslip), and proof of your bank account. Our team reviews within 1 business day — message us here anytime to check your status.`,
+      body: `Thanks ${d.fullName.split(' ')[0]}! To continue, we need 4 PDF documents: ID, proof of address, 3 months' bank statements (or latest payslip), and proof of your bank account. Our team reviews within 1 business day — message us here anytime to check your status.`,
       buttonLabel: 'Upload documents',
       url: `${base}/upload.html?ref=${reference}`,
     };
   }
+
 
   return message + '\n\nMessage us here anytime to check your status.';
 }

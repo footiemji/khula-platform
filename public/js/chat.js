@@ -188,11 +188,22 @@
   async function init() {
     const savedReference = loadSavedReference();
     if (savedReference) {
+      // Resuming an existing application still works even if new intake
+      // is paused — someone already partway through shouldn't get stuck
+      // just because the front door is temporarily closed to new arrivals.
       showChatUI();
       const resumed = await tryResume(savedReference);
       if (!resumed) await start();
       return;
     }
+
+    const config = await getConfig();
+    if (config.applicationsPaused) {
+      showChatUI();
+      await botSay("We're not accepting new applications right now — check back soon. Message us here if you'd like to be notified when we reopen.");
+      return;
+    }
+
     document.getElementById('channelChoice').style.display = 'block';
   }
 
@@ -487,23 +498,12 @@
 
       case 'ask_amount': {
         const amount = Number(text.replace(/[^\d.]/g, ''));
-        if (!amount) { await botSay('Please send just the number, e.g. 3000'); return; }
+        if (!amount) { await botSay('Please send just the number, e.g. 800'); return; }
+        // Salary advance — always due at month-end, no term to choose.
         state.data.requestedAmount = amount;
-        state.step = 'ask_term';
-        await botSay('Over how many months would you like to repay?', [
-          { label: '3 months', value: '3' },
-          { label: '6 months', value: '6' },
-          { label: '12 months', value: '12' },
-        ]);
-        break;
-      }
-
-      case 'ask_term': {
-        const term = Number(text.replace(/[^\d.]/g, ''));
-        if (!term || term < 1 || term > 60) { await botSay('Please reply with a number of months between 1 and 60.'); return; }
-        state.data.termMonths = term;
+        state.data.termMonths = 1;
         state.step = 'ask_purpose';
-        await botSay("What's the loan for? (e.g. emergency, school fees, medical, home repairs)");
+        await botSay("What's the advance for? (e.g. emergency, school fees, medical, groceries)");
         break;
       }
 

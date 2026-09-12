@@ -43,7 +43,7 @@ function ageFromSAIdNumber(idNumber) {
  * the decision engine.
  */
 async function checkHardGates(input) {
-  const { idNumber, underDebtReview, isUnrehabilitatedInsolvent } = input || {};
+  const { idNumber, phoneNumber, underDebtReview, isUnrehabilitatedInsolvent } = input || {};
   const reasons = [];
 
   const age = ageFromSAIdNumber(idNumber);
@@ -59,9 +59,29 @@ async function checkHardGates(input) {
     reasons.push('Applicant is an unrehabilitated insolvent.');
   }
 
+  const idClean = String(idNumber || '').replace(/\s/g, '');
+
+  // Duplicate/flooding block — anyone with an existing loan or an
+  // application still working through the pipeline can't start another
+  // one. Checked by BOTH ID number and phone number, since either alone
+  // is evadable (a different number, or claiming a different identity)
+  // but matching on either catches most real attempts to get around it.
+  // Applications that have reached a genuinely resolved state — declined,
+  // completed, or expired — don't count; only ones still actually in
+  // progress do.
+  const NON_TERMINAL_STATUSES = ['pending_kyc', 'manual_review', 'awaiting_signature', 'active'];
+  if (idClean || phoneNumber) {
+    const existing = await db.find('applications', (a) =>
+      NON_TERMINAL_STATUSES.includes(a.status) &&
+      ((idClean && a.idNumber === idClean) || (phoneNumber && a.phoneNumber === phoneNumber))
+    );
+    if (existing) {
+      reasons.push(`You already have ${existing.status === 'active' ? 'an active loan' : 'a pending application'} with Khula (reference ${existing.reference}). Please wait for that to be resolved before applying again.`);
+    }
+  }
+
   // Existing Khula loan in arrears — check for any active loan under this
   // ID number with an overdue instalment.
-  const idClean = String(idNumber || '').replace(/\s/g, '');
   if (idClean) {
     const existingLoans = await db.filter('applications', (a) => a.idNumber === idClean && a.status === 'active');
     const hasArrears = existingLoans.some((loan) =>

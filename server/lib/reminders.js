@@ -16,9 +16,10 @@
 // check developers.facebook.com/docs/whatsapp/pricing for current
 // South Africa rates specifically, which change periodically.
 
-const { sendWhatsAppMessage } = require('./whatsappSender');
+const { sendWhatsAppMessage, sendWhatsAppDocument } = require('./whatsappSender');
 const { toWhatsAppFormat } = require('./phoneFormat');
 const { logNotification } = require('./notificationLog');
+const { getPublicAppUrl } = require('./applicationEngine');
 
 function formatDate(iso) {
   return new Date(iso).toLocaleDateString('en-ZA', { day: 'numeric', month: 'long' });
@@ -103,4 +104,39 @@ async function sendSettlementConfirmation(app, settlementAmount, overpayment) {
   return sendAndLog(app, 'settlement_confirmation', message);
 }
 
-module.exports = { sendUpcomingReminder, sendOverdueNotice, sendRepeatOverdueReminder, sendThankYou, sendDisbursementConfirmation, sendMandateDeclinedNotice, sendSettlementConfirmation };
+// This is THE moment a customer first learns their real quote and is told
+// they're approved — and it's deliberately placed here, called only from
+// server/routes/admin.js's kyc-decision 'verify' branch, AFTER identity,
+// address, employment, and the credit bureau have all actually cleared.
+// Passing the initial affordability check is necessary but not
+// sufficient; showing a quote any earlier than this creates exactly the
+// "I thought I was approved" problem this was built to fix — a customer
+// who fails KYC or the bureau check should never have seen a number at
+// all, let alone a congratulatory one.
+async function sendApprovalQuoteReveal(app) {
+  const phone = toWhatsAppFormat(app.phoneNumber);
+  const firstName = app.fullName.split(' ')[0];
+  const q = app.affordability?.quotation;
+  if (!q) return { delivered: false, message: null };
+
+  const ceilingNote = q.aboveShortTermCreditCeiling
+    ? ` ⚠️ Above R${q.shortTermCreditCeiling} — needs compliance confirmation on applicable fee/interest caps before this quote is final.`
+    : '';
+  const summary = `Congratulations ${firstName} — you're approved! Here's your quote for R${app.requestedAmount} over ${app.termMonths} month${app.termMonths === 1 ? '' : 's'}: first instalment R${q.firstMonthInstalment.toFixed(2)}, total repayable R${q.totalRepayable.toFixed(2)}. Full breakdown in the PDF below.${ceilingNote}`;
+
+  const summaryDelivered = await sendWhatsAppMessage(phone, summary);
+  await logNotification(app.reference, { type: 'approval_quote_summary', message: summary, sentBy: 'system', delivered: summaryDelivered });
+
+  const base = getPublicAppUrl();
+  const pdfUrl = `${base}/api/applications/${app.reference}/pre-agreement.pdf`;
+  const pdfDelivered = await sendWhatsAppDocument(phone, pdfUrl, `Khula-Pre-Agreement-${app.reference}.pdf`, 'Your quote and pre-agreement statement');
+  await logNotification(app.reference, { type: 'approval_quote_pdf', message: `[PDF sent: ${pdfUrl}]`, sentBy: 'system', delivered: pdfDelivered });
+
+  const signPrompt = `Reply SIGN (or your full name) to accept and sign. Reference ${app.reference}.`;
+  const signDelivered = await sendWhatsAppMessage(phone, signPrompt);
+  await logNotification(app.reference, { type: 'sign_prompt', message: signPrompt, sentBy: 'system', delivered: signDelivered });
+
+  return { delivered: summaryDelivered && pdfDelivered && signDelivered };
+}
+
+module.exports = { sendUpcomingReminder, sendOverdueNotice, sendRepeatOverdueReminder, sendThankYou, sendDisbursementConfirmation, sendMandateDeclinedNotice, sendSettlementConfirmation, sendApprovalQuoteReveal };

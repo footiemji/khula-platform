@@ -425,14 +425,27 @@
   }
 
   async function viewDocument(reference, docId) {
+    // Opening the window SYNCHRONOUSLY, before the async fetch below, is
+    // what actually matters here — calling window.open() after an await
+    // breaks the browser's "this was a direct response to a click"
+    // tracking, and most browsers then silently block it as a popup with
+    // no visible error at all. That silent block, not a server issue, is
+    // almost certainly why "nothing happens" when clicking View.
+    const win = window.open('', '_blank');
     try {
       const res = await authedFetch(`/api/admin/applications/${reference}/documents/${docId}`);
-      if (!res.ok) return;
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        win.close();
+        alert(data.error || 'Could not load document.');
+        return;
+      }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
-      window.open(url, '_blank');
+      win.location.href = url;
     } catch {
-      alert('Could not load document.');
+      win.close();
+      alert('Could not load document — check your connection and try again.');
     }
   }
 
