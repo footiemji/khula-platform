@@ -157,7 +157,23 @@ router.get('/applications/:reference/documents/:docId', requireAdmin, asyncHandl
   try {
     buffer = readDocument(app.reference, doc.storedFilename);
   } catch (err) {
-    return res.status(500).json({ error: 'Could not decrypt document. Check KYC_ENCRYPTION_KEY is set and unchanged since upload.' });
+    // Distinguishing these matters enormously: a missing file means the
+    // document is gone (almost certainly Render's ephemeral disk wiping
+    // it on a redeploy — see docs/DEPLOY.md) and needs re-upload, while a
+    // genuine decrypt failure means the key changed. Reporting both with
+    // the same "check your key" message sent admins chasing the wrong
+    // fix — this is exactly what happened investigating a real
+    // customer's missing documents.
+    if (err.code === 'ENOENT') {
+      return res.status(404).json({
+        error: 'This document file no longer exists on disk. This almost always means the server redeployed since it was uploaded — Render\'s standard disk is ephemeral and gets wiped on every deploy unless a Persistent Disk is attached. The application record survived; the file itself did not. The customer will need to re-upload this document.',
+        code: 'FILE_MISSING',
+      });
+    }
+    return res.status(500).json({
+      error: 'The file exists but could not be decrypted with the current KYC_ENCRYPTION_KEY. This means the key genuinely differs from what was active at upload time.',
+      code: 'DECRYPT_FAILED',
+    });
   }
 
   await db.update('applications', (a) => a.reference === req.params.reference, (a) => ({
