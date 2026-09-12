@@ -5,6 +5,7 @@ const { streamPreAgreementPDF } = require('../lib/pdfAgreement');
 const { detectType } = require('../lib/fileType');
 const { saveDocument } = require('../lib/documentStore');
 const { createApplication, signApplication, getPublicAppUrl } = require('../lib/applicationEngine');
+const { findExistingApplication } = require('../lib/hardGates');
 const asyncHandler = require('../lib/asyncHandler');
 
 const router = express.Router();
@@ -29,6 +30,23 @@ router.post('/', asyncHandler(async (req, res) => {
 }));
 
 // GET /api/applications/:reference — status check
+// GET /api/applications/check-existing?idNumber=X&phoneNumber=Y — a
+// lightweight, early duplicate check. Called right after ID and phone are
+// captured, BEFORE the remaining ~15 questions, so someone who already
+// has an application in progress finds out on message two, not after
+// filling out the whole thing only to be rejected at the very end.
+router.get('/check-existing', asyncHandler(async (req, res) => {
+  const { idNumber, phoneNumber } = req.query;
+  const existing = await findExistingApplication(idNumber, phoneNumber);
+  res.json({
+    blocked: Boolean(existing),
+    reference: existing?.reference || null,
+    message: existing
+      ? `You already have ${existing.status === 'active' ? 'an active loan' : 'a pending application'} with Khula (reference ${existing.reference}). Please wait for that to be resolved before applying again.`
+      : null,
+  });
+}));
+
 router.get('/:reference', asyncHandler(async (req, res) => {
   const app = await db.find('applications', (a) => a.reference === req.params.reference);
   if (!app) return res.status(404).json({ error: 'Application not found.' });

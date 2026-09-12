@@ -180,6 +180,26 @@
       if (!res.ok) { errorEl.textContent = data.error; return; }
       phoneVerificationToken = data.verificationToken;
       document.getElementById('otpVerifiedBadge').style.display = 'inline';
+
+      // Check for a duplicate/pending application right here — the
+      // customer's ID number is already on the form by this point, and
+      // catching this now means the agent doesn't fill out the rest of
+      // the form only to be rejected at the very end, wasting more of
+      // the customer's time standing at the counter.
+      const idNumber = document.getElementById('f_idNumber').value.trim();
+      if (idNumber) {
+        try {
+          const checkRes = await fetch(`/api/applications/check-existing?idNumber=${encodeURIComponent(idNumber)}&phoneNumber=${encodeURIComponent(phone)}`);
+          const check = await checkRes.json();
+          if (check.blocked) {
+            errorEl.textContent = check.message;
+            document.getElementById('submitAppBtn').disabled = true;
+          }
+        } catch {
+          // Network blip — don't block on this alone, the same check
+          // runs again as a hard gate at final submission regardless.
+        }
+      }
     } catch {
       errorEl.textContent = 'Could not reach the server.';
     }

@@ -301,11 +301,32 @@
         await botSay('And your WhatsApp/cell number, so we can send your decision and agreement?');
         break;
 
-      case 'ask_phone':
+      case 'ask_phone': {
         state.data.phoneNumber = text;
+
+        // Check for a duplicate/pending application HERE — right after
+        // the two pieces of information needed to check (ID, phone) are
+        // captured — rather than only at the very end after 15 more
+        // questions. Nobody should fill out a whole application only to
+        // be rejected for something checkable on message two.
+        try {
+          const res = await fetch(`/api/applications/check-existing?idNumber=${encodeURIComponent(state.data.idNumber)}&phoneNumber=${encodeURIComponent(text)}`);
+          const check = await res.json();
+          if (check.blocked) {
+            await botSay(`⚠️ ${check.message}`);
+            state.step = 'done';
+            return;
+          }
+        } catch {
+          // If the check itself fails (network blip), don't block a
+          // genuine applicant over it — the same check runs again as a
+          // hard gate at final submission regardless.
+        }
+
         state.step = 'whatsapp_first';
         await promptWhatsAppFirst();
         break;
+      }
 
       case 'whatsapp_first':
         // This is a recommendation, not a hard gate — any reply continues.
@@ -492,7 +513,8 @@
           }).filter((d) => d.provider);
         }
         state.step = 'ask_amount';
-        await botSay('How much would you like to borrow? (Between R500 and R50,000)');
+        const config = await getConfig();
+        await botSay(`How much would you like to borrow? (Between R${config.minLoanAmount} and R${config.maxLoanAmount})`);
         break;
       }
 

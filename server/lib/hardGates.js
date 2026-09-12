@@ -36,6 +36,23 @@ function ageFromSAIdNumber(idNumber) {
   return age;
 }
 
+const NON_TERMINAL_STATUSES = ['pending_kyc', 'manual_review', 'awaiting_signature', 'active'];
+
+// Standalone so it can be checked EARLY in a conversation (right after ID
+// and phone are captured, before 15 more questions get asked) rather than
+// only at the very end via the full checkHardGates() call inside
+// createApplication(). Making someone answer an entire application only
+// to be rejected at the last step for something checkable on message two
+// is exactly the wasted-time problem this exists to avoid.
+async function findExistingApplication(idNumber, phoneNumber) {
+  const idClean = String(idNumber || '').replace(/\s/g, '');
+  if (!idClean && !phoneNumber) return null;
+  return db.find('applications', (a) =>
+    NON_TERMINAL_STATUSES.includes(a.status) &&
+    ((idClean && a.idNumber === idClean) || (phoneNumber && a.phoneNumber === phoneNumber))
+  );
+}
+
 /**
  * Runs the hard-gate checks. Returns { blocked: boolean, reasons: string[] }.
  * Called before affordability/risk scoring — if blocked is true, the
@@ -69,15 +86,9 @@ async function checkHardGates(input) {
   // Applications that have reached a genuinely resolved state — declined,
   // completed, or expired — don't count; only ones still actually in
   // progress do.
-  const NON_TERMINAL_STATUSES = ['pending_kyc', 'manual_review', 'awaiting_signature', 'active'];
-  if (idClean || phoneNumber) {
-    const existing = await db.find('applications', (a) =>
-      NON_TERMINAL_STATUSES.includes(a.status) &&
-      ((idClean && a.idNumber === idClean) || (phoneNumber && a.phoneNumber === phoneNumber))
-    );
-    if (existing) {
-      reasons.push(`You already have ${existing.status === 'active' ? 'an active loan' : 'a pending application'} with Khula (reference ${existing.reference}). Please wait for that to be resolved before applying again.`);
-    }
+  const existing = await findExistingApplication(idClean, phoneNumber);
+  if (existing) {
+    reasons.push(`You already have ${existing.status === 'active' ? 'an active loan' : 'a pending application'} with Khula (reference ${existing.reference}). Please wait for that to be resolved before applying again.`);
   }
 
   // Existing Khula loan in arrears — check for any active loan under this
@@ -95,4 +106,4 @@ async function checkHardGates(input) {
   return { blocked: reasons.length > 0, reasons, age };
 }
 
-module.exports = { checkHardGates, ageFromSAIdNumber };
+module.exports = { checkHardGates, ageFromSAIdNumber, findExistingApplication };

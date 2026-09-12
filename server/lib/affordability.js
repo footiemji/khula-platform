@@ -11,9 +11,9 @@ const { buildQuotation } = require('./costOfCredit');
 
 const MAX_INSTALMENT_TO_INCOME_RATIO = Number(process.env.MAX_INSTALMENT_TO_INCOME_RATIO || 0.30);
 const MIN_LOAN_AMOUNT = Number(process.env.MIN_LOAN_AMOUNT || 500);
-const MAX_LOAN_AMOUNT = Number(process.env.MAX_LOAN_AMOUNT || 50000);
+const MAX_LOAN_AMOUNT = Number(process.env.MAX_LOAN_AMOUNT || 1000);
 const MIN_NET_MONTHLY_INCOME = Number(process.env.MIN_NET_MONTHLY_INCOME || 3000);
-const MAX_TERM_MONTHS = Number(process.env.MAX_TERM_MONTHS || 60);
+const MAX_TERM_MONTHS = Number(process.env.MAX_TERM_MONTHS || 1);
 
 // Minimum deemed living expenses by income band — 05_Underwriting_Policy
 // Section 5.3. Where an applicant's declared expenses are lower than this

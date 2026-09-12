@@ -731,4 +731,41 @@ router.get('/whatsapp-status', requireAdmin, asyncHandler(async (req, res) => {
   });
 }));
 
+// POST /api/admin/reset-test-data  { confirm: "DELETE ALL TEST DATA", includeActive?: false }
+// A deliberately awkward, hard-to-trigger-by-accident way to clear out
+// test/junk applications and start clean. Requires an exact confirmation
+// phrase — not a generic {confirm:true} — so this can't be fired by a
+// stray request, a copy-pasted curl with the wrong flag, or muscle memory
+// from a different endpoint. Real, active loans (actual money owed to a
+// real customer) are protected by default and require a SEPARATE,
+// explicit includeActive:true to also touch — the two most dangerous
+// mistakes (wiping everything, and wiping it silently) each need their
+// own deliberate step to make.
+router.post('/reset-test-data', requireAdmin, asyncHandler(async (req, res) => {
+  const { confirm, includeActive } = req.body || {};
+  const REQUIRED_PHRASE = 'DELETE ALL TEST DATA';
+  if (confirm !== REQUIRED_PHRASE) {
+    return res.status(400).json({ error: `To confirm, send exactly {"confirm": "${REQUIRED_PHRASE}"} in the request body. This isn't a typo-guard formality — it's the only thing standing between this and actually deleting data.` });
+  }
+
+  const allApplications = await db.readAll('applications');
+  const toKeep = includeActive === true ? [] : allApplications.filter((a) => a.status === 'active');
+  const deletedCount = allApplications.length - toKeep.length;
+
+  await db.writeAll('applications', toKeep);
+  await db.writeAll('conversations', []);
+  await db.writeAll('otp_verifications', []);
+
+  console.warn(`[RESET] ${req.admin.email} cleared ${deletedCount} application(s)${includeActive ? ' (including active loans)' : ' (active loans preserved)'} at ${new Date().toISOString()}`);
+
+  res.json({
+    ok: true,
+    applicationsDeleted: deletedCount,
+    applicationsKept: toKeep.length,
+    activeLoansIncluded: includeActive === true,
+    conversationsCleared: true,
+    otpRecordsCleared: true,
+  });
+}));
+
 module.exports = router;

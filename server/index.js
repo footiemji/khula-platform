@@ -91,6 +91,8 @@ app.get('/api/config', (req, res) => res.json({
   whatsappBusinessNumber: process.env.WHATSAPP_BUSINESS_NUMBER || null,
   otpTemplateConfigured: Boolean(process.env.WHATSAPP_OTP_TEMPLATE_NAME),
   applicationsPaused: process.env.APPLICATIONS_PAUSED === 'true',
+  minLoanAmount: Number(process.env.MIN_LOAN_AMOUNT || 500),
+  maxLoanAmount: Number(process.env.MAX_LOAN_AMOUNT || 1000),
 }));
 
 // GET /api/whatsapp-qr.png — a scannable QR code for the WhatsApp entry

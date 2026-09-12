@@ -2,6 +2,7 @@ const express = require('express');
 const db = require('../lib/db');
 const { sendWhatsAppMessage } = require('../lib/whatsappSender');
 const { createApplication, signApplication, getPublicAppUrl } = require('../lib/applicationEngine');
+const { findExistingApplication } = require('../lib/hardGates');
 const { matchBankName } = require('../lib/bankCodes');
 const { sendWhatsAppList, sendWhatsAppButtons, sendWhatsAppCtaUrl, sendWhatsAppDocument } = require('../lib/whatsappSender');
 
@@ -261,11 +262,23 @@ async function advanceConversation(session, text) {
       await saveSession(session);
       return `Thanks ${text.split(' ')[0]}. What's your 13-digit South African ID number? (This stays private and is only used to verify your identity.)`;
 
-    case 'ask_id':
+    case 'ask_id': {
       if (!/^\d{13}$/.test(text.replace(/\s/g, ''))) {
         return "That doesn't look like a valid 13-digit ID number. Please try again.";
       }
       session.data.idNumber = text.replace(/\s/g, '');
+
+      // Check for a duplicate/pending application HERE — right after ID
+      // is captured, with phone already known from the conversation
+      // itself — rather than only at the very end after 15 more
+      // questions. See server/lib/hardGates.js's findExistingApplication.
+      const existing = await findExistingApplication(session.data.idNumber, session.phone);
+      if (existing) {
+        session.step = 'done';
+        await saveSession(session);
+        return `⚠️ You already have ${existing.status === 'active' ? 'an active loan' : 'a pending application'} with Khula (reference ${existing.reference}). Please wait for that to be resolved before applying again.`;
+      }
+
       session.step = 'ask_marital_status';
       await saveSession(session);
       return {
@@ -279,6 +292,7 @@ async function advanceConversation(session, text) {
           { id: 'divorced_widowed', title: 'Divorced/widowed' },
         ],
       };
+    }
 
     case 'ask_marital_status': {
       const valid = ['single', 'married_in_community', 'married_out_of_community', 'divorced_widowed'];
@@ -436,7 +450,7 @@ async function advanceConversation(session, text) {
       }
       session.step = 'ask_amount';
       await saveSession(session);
-      return `How much would you like to borrow? (Between R${process.env.MIN_LOAN_AMOUNT || 500} and R${process.env.MAX_LOAN_AMOUNT || 50000})`;
+      return `How much would you like to borrow? (Between R${process.env.MIN_LOAN_AMOUNT || 500} and R${process.env.MAX_LOAN_AMOUNT || 1000})`;
     }
 
     case 'ask_amount': {
